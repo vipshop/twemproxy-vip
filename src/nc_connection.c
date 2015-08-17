@@ -165,6 +165,10 @@ _conn_get(void)
     conn->done = 0;
     conn->redis = 0;
     conn->need_auth = 0;
+
+#if 1 //shenzheng 2014-12-24 replication pool
+	conn->nreplication_request = 0;
+#endif //shenzheng 2014-12-26 replication pool
 	
 #if 1 //shenzheng 2015-7-14 config-reload
 	conn->reload_conf = 0;
@@ -827,7 +831,6 @@ void conn_close_for_replace_server(struct conn *conn, int err)
 	    }
 
 		ASSERT(server->ns_conn_q > 0);
-		//conn = TAILQ_FIRST(&server->s_conn_q);
 		conn->err = err;
 		
 		if(!TAILQ_EMPTY(&conn->imsg_q))

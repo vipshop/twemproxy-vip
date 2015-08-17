@@ -125,6 +125,40 @@ struct server_pool {
     unsigned           preconnect:1;         /* preconnect? */
     unsigned           redis:1;              /* redis? */
 
+#if 1 //shenzheng 2014-12-20 replication pool
+	struct string	   replication_from;	 /* the name of server_pool that this server_pool replicate from(for slave server pool) */
+	struct server_pool *sp_master;			 /* this server pool is replication from sp_master(for slave server pool) */
+	struct array	   replication_pools;	 /* server_pools replicate from this server_pool(for master server pool) */
+	/* [replication_mode] 
+	  * 0:asynchronous write(default); 
+	  * 1:semi-synchronous write(just sent the master response to client, 
+	  *    and get the slave write response, if not success, notes in a file, 
+	  *	 not response slave to client);
+	  * 2: synchronous write.
+	  */
+	int		           replication_mode;   /* equal the conf_pool->replication_mode(for master server pool) */
+
+	/* [write_back_mode] 
+	  * 0:if master pool miss but slave pool hit, do not write back to master slave(default);
+	  * 1:if master pool miss but slave pool hit, write back to master slave,
+	  *    and if error occur, record in log file.
+	  */
+	int		   		   write_back_mode;   /* equal the conf_pool->write_back_mode(for master server pool) */
+
+	/* [penetrate_mode] 
+	  * just for get/gets command
+	  * 0:master pool return no-error and get key miss, then penetrate to slave pool(default);
+	  * 1:master pool return error, then penetrate to slave pool;
+	  * 2:master pool return no-error or get key miss, then penetrate to slave pool;
+	  * 3:do not penetrate anyway.
+	  */
+	int		   		   penetrate_mode;   /* equal the conf_pool->penetrate_mode(for master server pool) */
+	/* [inconsistent_log]
+	  * storage the inconsistent responses between master pool and slave pool
+	  */
+	struct logger	   *inconsistent_log;	/* for master pool */
+#endif //shenzheng 2015-4-20 replication pool
+
 #if 1 //shenzheng 2015-6-5 tcpkeepalive
 	unsigned           tcpkeepalive:1;       /* tcp keepalive? */
 	int				   tcpkeepidle;			 /* tcpkeep idle */

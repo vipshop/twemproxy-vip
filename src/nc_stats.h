@@ -29,7 +29,8 @@
     ACTION( server_ejects,          STATS_COUNTER,      "# times backend server was ejected")                       \
     /* forwarder behavior */                                                                                        \
     ACTION( forward_error,          STATS_COUNTER,      "# times we encountered a forwarding error")                \
-    ACTION( fragments,              STATS_COUNTER,      "# fragments created from a multi-vector request")          \
+    ACTION( fragments,              STATS_COUNTER,      "# fragments created from a multi-vector request")          \																		
+	ACTION( inconsistent,           STATS_COUNTER,      "# times of inconsistent responses betweem master and slave pool")      \
 
 #define STATS_SERVER_CODEC(ACTION)                                                                                  \
     /* server behavior */                                                                                           \
@@ -47,6 +48,10 @@
     ACTION( in_queue_bytes,         STATS_GAUGE,        "current request bytes in incoming queue")                  \
     ACTION( out_queue,              STATS_GAUGE,        "# requests in outgoing queue")                             \
     ACTION( out_queue_bytes,        STATS_GAUGE,        "current request bytes in outgoing queue")                  \
+    ACTION( penetrate,              STATS_COUNTER,      "# times of penetrate from this server to slave pool")      \
+    ACTION( penetrate_err,          STATS_COUNTER,      "# errors of penetrate from this server to slave pool")     \
+    ACTION( write_back,        		STATS_COUNTER,      "# times of write back from this server from slave pool")   \
+    ACTION( write_back_err,        	STATS_COUNTER,      "# errors of write back from this server from slave pool")  \
 
 #define STATS_ADDR      "0.0.0.0"
 #define STATS_PORT      22222

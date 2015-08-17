@@ -186,4 +186,10 @@ char * set_log_file_count(char *arg);
 void log_all(const char *file, int line, size_t data_len, uint8_t *data, const char *fmt, ...);
 #endif //shenzheng 2015-2-3 common
 
+#if 1 //shenzheng 2015-4-20 replication pool
+int inconsistent_log_init(struct server_pool *sp);
+void inconsistent_log_deinit(struct server_pool *sp);
+int storage_in_inconsistent_log(struct server_pool *sp, uint8_t content[]);
+#endif //shenzheng 2015-4-20 replication pool
+
 #endif

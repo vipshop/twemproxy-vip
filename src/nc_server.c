@@ -363,16 +363,75 @@ server_close(struct context *ctx, struct conn *conn)
 			req_put(msg);
         } else {
 
+#if 1 //shenzheng 2015-4-20 replication pool		
+#else //shenzheng 2015-4-20 replication pool
             c_conn = msg->owner;
             ASSERT(c_conn->client && !c_conn->proxy);
-
+#endif //shenzheng 2015-4-20 replication pool
 			msg->error = 1;
             msg->err = conn->err;
+#if 1 //shenzheng 2015-1-16 replication pool
+			if(msg->frag_id)
+			{
+				if(req_need_penetrate(msg, msg->peer))
+				{
+					req_penetrate(ctx, conn, msg, msg->peer);
+					continue;
+				}
+				else
+				{
+#endif //shenzheng 2015-1-16 replication pool
             msg->done = 1;
+#if 1 //shenzheng 2015-1-16 replication pool
+				}
+			}
+			else 
+			{
+				if(msg->server_pool_id == -1)
+				{
+					msg->self_done = 1;
+					if(msg_pass(msg))
+					{
+						msg->done = 1;
+						msg->handle_result(ctx, conn, msg);
+					}
+				}
+				else if(msg->server_pool_id == -2)
+				{
+					msg->self_done = 1;
+					msg->handle_result(ctx, conn, msg);
+					req_put(msg);
+					continue;
+				}
+				else
+				{
+					msg->self_done = 1;
+					struct msg *master_msg = msg->master_msg;
+					ASSERT(master_msg->nreplication_msgs > 0);
+					ASSERT(master_msg->replication_msgs != NULL);
+					if(msg_pass(master_msg))
+					{
+						master_msg->done = 1;
+						master_msg->handle_result(ctx, conn, master_msg);
+						if(master_msg->master_send)
+						{
+							req_put(master_msg);
+							continue;
+						}
+					}
+				}
+			}
+#endif //shenzheng 2015-3-10 replication pool
+            
 
             if (msg->frag_owner != NULL) {
                 msg->frag_owner->nfrag_done++;
             }
+			
+#if 1 //shenzheng 2015-4-20 replication pool
+			c_conn = msg->owner;
+			ASSERT(c_conn->client && !c_conn->proxy);
+#endif //shenzheng 2015-4-20 replication pool
 
             if (req_done(c_conn, TAILQ_FIRST(&c_conn->omsg_q))) {
 
@@ -398,16 +457,76 @@ server_close(struct context *ctx, struct conn *conn)
                       " type %d", conn->sd, msg->id, msg->mlen, msg->type);
 			req_put(msg);
         } else {
+#if 1 //shenzheng 2015-4-20 replication pool		
+#else //shenzheng 2015-4-20 replication pool
             c_conn = msg->owner;
             ASSERT(c_conn->client && !c_conn->proxy);
+#endif //shenzheng 2015-4-20 replication pool
 
 			msg->error = 1;
             msg->err = conn->err;
+#if 1 //shenzheng 2015-1-16 replication pool
+			if(msg->frag_id)
+			{
+			
+				if(req_need_penetrate(msg, msg->peer))
+				{
+					req_penetrate(ctx, conn, msg, msg->peer);
+					continue;
+				}
+				else
+				{
+#endif //shenzheng 2015-4-8 replication pool
 			msg->done = 1;
+#if 1 //shenzheng 2015-4-8 replication pool
+				}
+			}
+			else 
+			{
+				if(msg->server_pool_id == -1)
+				{
+					msg->self_done = 1;
+					if(msg_pass(msg))
+					{
+						msg->done = 1;
+						msg->handle_result(ctx, conn, msg);
+					}
+				}
+				else if(msg->server_pool_id == -2)
+				{
+					msg->self_done = 1;
+					msg->handle_result(ctx, conn, msg);
+					req_put(msg);
+					continue;
+				}
+				else
+				{
+					msg->self_done = 1;
+					struct msg *master_msg = msg->master_msg;
+					ASSERT(master_msg->nreplication_msgs > 0);
+					ASSERT(master_msg->replication_msgs != NULL);
+					if(msg_pass(master_msg))
+					{
+						master_msg->done = 1;
+						master_msg->handle_result(ctx, conn, master_msg);
+						if(master_msg->master_send)
+						{
+							req_put(master_msg);
+							continue;
+						}
+					}
+				}
+			}
+#endif //shenzheng 2015-3-10 replication pool
 			
             if (msg->frag_owner != NULL) {
                 msg->frag_owner->nfrag_done++;
             }
+
+#if 1 //shenzheng 2015-4-20 replication pool
+			c_conn = msg->owner;
+			ASSERT(c_conn->client && !c_conn->proxy);
+#endif //shenzheng 2015-4-20 replication pool
 
             if (req_done(c_conn, TAILQ_FIRST(&c_conn->omsg_q))) {
 
@@ -1024,6 +1143,72 @@ server_pool_each_run(void *elem, void *data)
     return server_pool_run(elem);
 }
 
+#if 1 //shenzheng 2014-12-23 replication pool
+static rstatus_t 
+server_pool_each_set_replication(void *elem, void *data)
+{
+	rstatus_t status;
+	uint32_t i, nelem;
+	struct server_pool *sp = elem;
+	struct array *sps = data;
+	struct server_pool *sp_master;
+	for (i = 0, nelem = array_n(sps); i < nelem; i++) 
+	{
+        sp_master = array_get(sps, i);
+		if(0 == string_compare(&sp->replication_from, &sp_master->name))
+		{
+			log_debug(LOG_DEBUG, "server_pool %s replication from %s", sp->name.data, sp_master->name.data);
+
+			//now we just allow one replication pool from another pool
+			if(array_n(&sp_master->replication_pools) > 0)
+			{
+				log_error("error: %s pool has more than one replication pools(now we just allow one replication pool from another pool)!!", sp_master->name.data);
+				return NC_ERROR;
+			}
+			//now we do not allow multi-level replication
+			if(!string_empty(&sp_master->replication_from))
+			{
+				log_error("error: %s pool can not replication from %s pool(now we do not allow multi-level replication)!!", 
+					sp->name.data, sp_master->name.data);
+				return NC_ERROR;
+			}
+			//now we do not allow multi-level replication
+			if(array_n(&sp->replication_pools) > 0)
+			{
+				log_error("error: %s pool can not replication from %s pool(now we do not allow multi-level replication)!!", 
+					sp->name.data, sp_master->name.data);
+				return NC_ERROR;
+			}
+			//now we do not support replication pool for redis
+			if(sp->redis || sp_master->redis)
+			{
+				log_error("error: %s pool can not replication from %s pool(now we do not support replication pool for redis)!!", 
+					sp->name.data, sp_master->name.data);
+				return NC_ERROR;
+			}
+			
+			if(0 == sp_master->replication_pools.nalloc)
+			{
+				array_init(&sp_master->replication_pools, 1, sizeof(struct server_pool **));
+			}
+			struct server_pool **sp_address = array_push(&sp_master->replication_pools);
+			*sp_address = sp;
+			sp->sp_master = sp_master;
+			if(sp_master->inconsistent_log == NULL)
+			{
+				status = inconsistent_log_init(sp_master);
+				if(status != NC_OK)
+				{
+					return status;
+				}
+			}
+			break;
+		}
+	}
+	return NC_OK;
+}
+#endif //shenzheng 2015-4-20 replication pool
+
 rstatus_t
 server_pool_init(struct array *server_pool, struct array *conf_pool,
                  struct context *ctx)
@@ -1070,6 +1255,40 @@ server_pool_init(struct array *server_pool, struct array *conf_pool,
         return status;
     }
 
+#if 1 //shenzheng 2014-12-23 replication pool
+	/* build the replication relationship */
+	status = array_each(server_pool, server_pool_each_set_replication, server_pool);
+	if (status != NC_OK){
+		server_pool_deinit(server_pool);
+		return status;
+	}
+
+	uint32_t i, nelem;
+	for(i = 0, nelem = array_n(server_pool); i < nelem; i ++)
+	{
+		struct server_pool * sp = array_get(server_pool, i);
+		log_debug(LOG_DEBUG, "server_pool %s replication_mode : %d", sp->name.data, 
+			sp->replication_mode);
+		log_debug(LOG_DEBUG, "server_pool %s penetrate_mode : %d", sp->name.data, 
+			sp->penetrate_mode);
+		log_debug(LOG_DEBUG, "server_pool %s write_back_mode : %d", sp->name.data, 
+			sp->write_back_mode);
+		log_debug(LOG_DEBUG, "server_pool %s replication_from : %s", sp->name.data, 
+			sp->replication_from.len?sp->replication_from.data:"NULL");
+		log_debug(LOG_DEBUG, "server_pool %s sp_master : %d", sp->name.data, 
+			sp->sp_master?sp->sp_master->idx:"NULL");
+		log_debug(LOG_DEBUG, "server_pool %s replication_pools size : %d", sp->name.data, 
+			sp->replication_pools.nelem);
+		uint32_t j, nelem_replication;
+		for(j = 0, nelem_replication= array_n(&sp->replication_pools); j < nelem_replication; j ++)
+		{
+			struct server_pool ** sp_tmp = array_get(&sp->replication_pools, j);
+			log_debug(LOG_DEBUG, "server_pool %s replication_pools[%d] : %s", sp->name.data, 
+			j, (*sp_tmp)->name.len?(*sp_tmp)->name.data:"NULL");
+		}
+	}
+#endif //shenzheng 2015-3-9 replication pool
+
     log_debug(LOG_DEBUG, "init %"PRIu32" pools", npool);
 
     return NC_OK;
@@ -1095,7 +1314,23 @@ server_pool_deinit(struct array *server_pool)
         }
 
         server_deinit(&sp->server);
-		
+#if 1 //shenzheng 2014-12-23 replication pool
+		uint32_t nreplication_pool;
+		nreplication_pool = array_n(&sp->replication_pools);
+		log_debug(LOG_DEBUG, "nreplication_pool : %d", nreplication_pool);
+		while(array_n(&sp->replication_pools) > 0) 
+		{
+        	struct server_pool *sp_tmp;
+			sp_tmp = array_pop(&sp->replication_pools);
+    	}
+    	log_debug(LOG_DEBUG, "deinit replication_pools");
+    	array_deinit(&sp->replication_pools);
+
+		if(sp->inconsistent_log != NULL)
+		{
+			inconsistent_log_deinit(sp);
+		}
+#endif //shenzheng 2015-4-20 replication pool
         log_debug(LOG_DEBUG, "deinit pool %"PRIu32" '%.*s'", sp->idx,
                   sp->name.len, sp->name.data);
     }
@@ -1348,6 +1583,11 @@ server_pool_each_client_conn_reset(void *elem, void *data)
 				sp_new->nc_conn_q++;
 				TAILQ_INSERT_TAIL(&sp_new->c_conn_q, conn, conn_tqe);
 				conn->owner = sp_new;
+				
+#if 1 //shenzheng 2015-7-7 replication pool
+				conn->nreplication_request = array_n(&sp_new->replication_pools);
+#endif //shenzheng 2015-7-7 replication pool
+				
 				log_debug(LOG_INFO, "c_conn(%d) moved", conn->sd);
 			}
 			

@@ -652,9 +652,8 @@ core_core(void *arg, uint32_t events)
 	        	conn->sd, strerror(errno));
 	    }
 
-		
 		ctx->stats->reload_thread = 1;
-	
+		
 		struct sockaddr_in s_add,c_adda;
 		bzero(&s_add,sizeof(struct sockaddr_in));
 		s_add.sin_family=AF_INET;	
@@ -666,6 +665,7 @@ core_core(void *arg, uint32_t events)
 			log_error("error: connect to stats for reload error(%s)", strerror(errno));
 		}
 		
+
 		close(conn->sd);
 		conn->sd = -1;
 		conn->owner = NULL;
@@ -743,42 +743,6 @@ core_loop(struct context *ctx)
     core_timeout(ctx);
 
     stats_swap(ctx->stats);
-
-#if 0 //shenzheng 2015-5-11 config-reload
-	if(ctx->reload_thread == 1)
-	{
-		struct array *pools_curr, *pools_old;
-
-		ASSERT(ctx->stats->pause);
-		
-		if(ctx->which_pool)
-		{
-			pools_curr = &ctx->pool_swap;
-			pools_old = &ctx->pool;
-		}
-		else
-		{
-			pools_curr = &ctx->pool;
-			pools_old = &ctx->pool_swap;
-		}
-
-		array_each(pools_old, server_pool_each_proxy_conn_old_close, pools_curr);
-		
-		array_each(pools_curr, server_pool_each_client_conn_reset, pools_old);
-		
-		ASSERT(array_n(pools_old) > 0);	
-		if(NC_OK == server_pool_old_deinit(pools_old, ctx))
-		{
-			if(NC_OK == stats_recreate(ctx, pools_curr))
-			{
-				ctx->stats->reload_thread = 1;
-				ctx->stats->pause = 0;				
-			}
-			
-			ctx->reload_thread = 0;
-		}
-	}
-#endif //shenzheng 2015-5-11 config-reload
-
+	
     return NC_OK;
 }

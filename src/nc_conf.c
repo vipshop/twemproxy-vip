@@ -101,6 +101,21 @@ static struct command conf_commands[] = {
     { string("servers"),
       conf_add_server,
       offsetof(struct conf_pool, server) },
+      
+#if 1 //shenzheng 2014-12-20 replication pool
+	{ string("replication_from"),
+      conf_set_string,
+      offsetof(struct conf_pool, replication_from) },
+    { string("replication_mode"),
+      conf_set_replication_mode,
+      offsetof(struct conf_pool, replication_mode) },
+    { string("write_back_mode"),
+      conf_set_write_back_mode,
+      offsetof(struct conf_pool, write_back_mode) },
+    { string("penetrate_mode"),
+      conf_set_penetrate_mode,
+      offsetof(struct conf_pool, penetrate_mode) },
+#endif //shenzheng 2015-4-2 replication pool
 
 #if 1 //shenzheng 2015-6-5 tcpkeepalive
 	{ string("tcpkeepalive"),
@@ -225,6 +240,13 @@ conf_pool_init(struct conf_pool *cp, struct string *name)
 
     cp->valid = 0;
 
+#if 1 //shenzheng 2014-12-20 replication pool
+	string_init(&cp->replication_from);
+	cp->replication_mode = CONF_UNSET_NUM;
+	cp->write_back_mode = CONF_UNSET_NUM;
+	cp->penetrate_mode = CONF_UNSET_NUM;
+#endif //shenzheng 2015-4-2 replication pool
+
 #if 1 //shenzheng 2015-6-5 tcpkeepalive
 	cp->tcpkeepalive = CONF_UNSET_NUM;
 	cp->tcpkeepidle = CONF_UNSET_NUM;
@@ -265,7 +287,9 @@ conf_pool_deinit(struct conf_pool *cp)
         conf_server_deinit(array_pop(&cp->server));
     }
     array_deinit(&cp->server);
-
+#if 1 //shenzheng 2014-12-23 replication pool
+	string_deinit(&cp->replication_from);
+#endif //shenzheng 2014-12-23 replication pool
     log_debug(LOG_VVERB, "deinit conf pool %p", cp);
 }
 
@@ -322,12 +346,23 @@ conf_pool_each_transform(void *elem, void *data)
     sp->auto_eject_hosts = cp->auto_eject_hosts ? 1 : 0;
     sp->preconnect = cp->preconnect ? 1 : 0;
 
+#if 1 //shenzheng 2014-12-20 replication pool
+	sp->replication_from = cp->replication_from;
+	sp->replication_mode = cp->replication_mode;
+	sp->write_back_mode = cp->write_back_mode;
+	sp->penetrate_mode = cp->penetrate_mode;
+	sp->sp_master = NULL;
+	sp->inconsistent_log = NULL;
+	array_null(&sp->replication_pools);
+#endif //shenzheng 2015-4-20 replication pool
+
 #if 1 //shenzheng 2015-6-5 tcpkeepalive
 	sp->tcpkeepalive = cp->tcpkeepalive ? 1 : 0;
 	sp->tcpkeepidle = cp->tcpkeepidle;
 	sp->tcpkeepintvl = cp->tcpkeepintvl;
 	sp->tcpkeepcnt = cp->tcpkeepcnt;
 #endif //shenzheng 2015-6-5 tcpkeepalive
+
 
     status = server_init(&sp->server, &cp->server, sp);
     if (status != NC_OK) {
@@ -1343,6 +1378,18 @@ conf_validate_pool(struct conf *cf, struct conf_pool *cp)
         cp->server_failure_limit = CONF_DEFAULT_SERVER_FAILURE_LIMIT;
     }
 
+#if 1 //shenzheng 2015-1-7 replication pool
+	if (cp->replication_mode == CONF_UNSET_NUM) {
+        cp->replication_mode = CONF_DEFAULT_REPLICATION_MODE;
+    }
+	if (cp->write_back_mode == CONF_UNSET_NUM) {
+        cp->write_back_mode = CONF_DEFAULT_WRITE_BACK_MODE;
+    }
+	if (cp->penetrate_mode == CONF_UNSET_NUM) {
+        cp->penetrate_mode = CONF_DEFAULT_PENETRATE_MODE;
+    }
+#endif //shenzheng 2015-4-2 replication pool
+
 #if 1 //shenzheng 2015-6-5 tcpkeepalive
 	if (cp->tcpkeepalive == CONF_UNSET_NUM) {
 		cp->tcpkeepalive = CONF_DEFAULT_TCPKEEPALIVE;
@@ -2059,6 +2106,92 @@ conf_write_back_yaml(struct context *ctx, struct string *old_ser, struct string 
 
 #endif //shenzheng 2014-9-11 replace server
 
+#if 1 //shenzheng 2015-1-7 replication pool
+char *
+conf_set_replication_mode(struct conf *cf, struct command *cmd, void *conf)
+{
+    uint8_t *p;
+    int num, *np;
+    struct string *value;
+
+    p = conf;
+    np = (int *)(p + cmd->offset);
+
+    if (*np != CONF_UNSET_NUM) {
+        return "is a duplicate";
+    }
+
+    value = array_top(&cf->arg);
+
+    num = nc_atoi(value->data, value->len);
+    if (num < 0) {
+        return "is not a number";
+    }
+	if (num > 2) {
+		return "must be 0 or 1 or 2, not others";
+	}
+    *np = num;
+
+    return CONF_OK;
+}
+
+char *
+conf_set_write_back_mode(struct conf *cf, struct command *cmd, void *conf)
+{
+    uint8_t *p;
+    int num, *np;
+    struct string *value;
+
+    p = conf;
+    np = (int *)(p + cmd->offset);
+
+    if (*np != CONF_UNSET_NUM) {
+        return "is a duplicate";
+    }
+
+    value = array_top(&cf->arg);
+
+    num = nc_atoi(value->data, value->len);
+    if (num < 0) {
+        return "is not a number";
+    }
+	if (num > 1) {
+		return "must be 0 or 1, not others";
+	}
+    *np = num;
+
+    return CONF_OK;
+}
+
+char *
+conf_set_penetrate_mode(struct conf *cf, struct command *cmd, void *conf)
+{
+    uint8_t *p;
+    int num, *np;
+    struct string *value;
+
+    p = conf;
+    np = (int *)(p + cmd->offset);
+
+    if (*np != CONF_UNSET_NUM) {
+        return "is a duplicate";
+    }
+
+    value = array_top(&cf->arg);
+
+    num = nc_atoi(value->data, value->len);
+    if (num < 0) {
+        return "is not a number";
+    }
+	if (num > 3) {
+		return "must be 0, 1, 2 or 3, not others";
+	}
+    *np = num;
+
+    return CONF_OK;
+}
+#endif //shenzheng 2015-4-2 replication pool
+
 #if 1 //shenzheng 2015-1-8 log rotating
 char *
 conf_set_log_rorate(struct conf *cf, struct command *cmd, void *conf)
@@ -2381,6 +2514,32 @@ conf_pool_each_compare(void *elem, void *data)
 		return NC_ERROR;
 	}
 #endif //shenzheng 2015-6-16 tcpkeepalive
+
+#if 1 //shenzheng 2015-7-7 replication pool
+	//replication_from
+	if(string_compare(&cp1->replication_from, &cp2->replication_from) != 0)
+	{
+		return NC_ERROR;
+	}
+
+	//replication_mode
+	if(cp1->replication_mode != cp2->replication_mode)
+	{
+		return NC_ERROR;
+	}
+
+	//write_back_mode
+	if(cp1->write_back_mode != cp2->write_back_mode)
+	{
+		return NC_ERROR;
+	}
+
+	//penetrate_mode
+	if(cp1->penetrate_mode != cp2->penetrate_mode)
+	{
+		return NC_ERROR;
+	}
+#endif //shenzheng 2015-7-7 replication pool
 
 	return NC_OK;
 }
@@ -2997,7 +3156,6 @@ conf_reload(struct context *ctx, struct conn *conn,
 		goto done;
 	}
 
-	//status = NC_OK;
 	status = conf_two_check_diff(ctx->cf, cf_swap);
 	if(status != NC_OK)
 	{

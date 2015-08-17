@@ -26,6 +26,10 @@
 #endif //shenzheng 2014-12-15 log rotating step two
 #include <nc_core.h>
 
+#if 1 //shenzheng 2015-4-20 replication pool
+static		char		inconsistent_file_suffix[] = {'.','i','n','c','o','n'};
+#endif //shenzheng 2015-4-20 replication pool
+
 #if 1 //shenzheng 2014-12-9 log rotating
 int 		LOG_RORATE 						= 0;
 ssize_t 	LOG_FIEL_MAX_SIZE_FOR_ROTATING 	= 1048576;	/* 1MB */
@@ -1150,5 +1154,164 @@ receive_buf_deinit()
 }
 #endif
 #endif //shenzheng 2015-3-26 for debug
+
+#if 1 //shenzheng 2015-4-20 replication pool
+int
+inconsistent_log_init(struct server_pool *sp)
+{
+	int i;
+	int inconsistent_log_len = 0;
+	bool path_flag = false;
+	struct logger *l = &logger;
+	ASSERT(sp->inconsistent_log == NULL);
+	struct logger *in_l = nc_zalloc(sizeof(struct logger));
+	if(in_l == NULL)
+	{
+		return NC_ENOMEM;
+	}
+	
+    in_l->level = LOG_PVERB;
+	
+	for(i = strlen(l->name) - 1; i >= 0; i --)
+	{
+		if((l->name)[i] == '\/')
+		{
+			path_flag = true;
+			break;	
+		}
+	}
+
+	log_debug(LOG_DEBUG, "i : %d", i);
+
+	if(i >= 1)
+	{
+		inconsistent_log_len = i + 1; 
+	}
+	else if(path_flag)
+	{
+		log_stderr("error : log file \"%s\" is error", l->name);
+		return NC_ERROR;
+	}
+	else
+	{
+		inconsistent_log_len = 1;
+	}
+	
+	inconsistent_log_len += sp->name.len;
+	inconsistent_log_len += strlen(inconsistent_file_suffix);
+	inconsistent_log_len += 1;
+	log_debug(LOG_DEBUG, "inconsistent_log_len : %d", inconsistent_log_len);
+	log_debug(LOG_DEBUG, "inconsistent_file_suffix(len:%d) : %s", 
+		strlen(inconsistent_file_suffix),inconsistent_file_suffix);
+	in_l->name = nc_zalloc(inconsistent_log_len*sizeof(char *));
+	if(in_l->name == NULL)
+	{
+		return NC_ENOMEM;
+	}
+
+	if(path_flag)
+	{
+		memcpy(in_l->name, l->name, i+1);
+	}
+	else
+	{
+		i = -1;
+	}
+
+	log_debug(LOG_DEBUG, "server_pool(%s)->inconsistent_log : %s", sp->name.data, in_l->name);
+
+	memcpy(in_l->name + i + 1, sp->name.data, sp->name.len);
+
+	log_debug(LOG_DEBUG, "server_pool(%s)->inconsistent_log : %s", sp->name.data, in_l->name);
+
+	memcpy(in_l->name + i + 1 + sp->name.len, 
+		inconsistent_file_suffix, strlen(inconsistent_file_suffix));
+
+	log_debug(LOG_DEBUG, "server_pool(%s)->inconsistent_log : %s", sp->name.data, in_l->name);
+
+	ASSERT((in_l->name)[inconsistent_log_len - 1] == '\0');
+	
+    if (in_l->name == NULL || !strlen(in_l->name)) {
+        in_l->fd = STDERR_FILENO;
+    } else {
+        in_l->fd = open(in_l->name, O_WRONLY | O_APPEND | O_CREAT, 0644);
+        if (in_l->fd < 0) {
+            log_stderr("error : opening inconsistent log file '%s' failed: %s", in_l->name,
+                       strerror(errno));
+            return NC_ERROR;
+        }
+
+		if(log_rotate_init(in_l) < 0)
+		{
+			return NC_ERROR;
+		}
+		if(log_files_circular_init(in_l) < 0)
+		{
+			return NC_ERROR;
+		}
+
+    }
+
+	sp->inconsistent_log = in_l;
+
+    return NC_OK;
+}
+
+void
+inconsistent_log_deinit(struct server_pool *sp)
+{
+	struct logger *in_l = sp->inconsistent_log;
+	ASSERT(in_l != NULL);
+    if (in_l->fd < 0 || in_l->fd == STDERR_FILENO) {
+        return;
+    }
+
+    close(in_l->fd);
+
+	ASSERT(in_l->name != NULL);
+	nc_free(in_l->name);
+	_log_rotate_deinit(in_l);
+	_log_files_circular_deinit(in_l);
+
+	nc_free(in_l);
+	sp->inconsistent_log = NULL;
+}
+
+int
+storage_in_inconsistent_log(struct server_pool *sp, uint8_t content[])
+{
+	rstatus_t status;
+	if(sp == NULL)
+	{
+		return NC_ERROR;
+	}
+	struct logger *in_l = sp->inconsistent_log;
+	ASSERT(in_l != NULL);
+	int len;
+    ssize_t n;
+    
+    if (in_l->fd < 0) {
+        return NC_ERROR;
+    }
+
+	len = strlen(content);
+
+    n = nc_write(in_l->fd, content, len);
+    if (n < 0) {
+        in_l->nerror++;
+		return NC_ERROR;
+    }
+	else
+	{
+		status = _log_rotating(n, in_l);
+		if(status != NC_OK)
+		{
+			return status;
+		}
+	}
+
+	return NC_OK;
+}
+#endif //shenzheng 2015-4-20 replication pool
 
 

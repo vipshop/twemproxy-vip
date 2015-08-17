@@ -32,6 +32,30 @@
  */
 #define MEMCACHE_MAX_KEY_LENGTH 250
 
+#if 1 //shenzheng 2015-4-17 replication pool
+/*
+ * usage: if master response and slave response is different,
+ *            we stored it in file.
+ * incon_m_s_svd_in_f short for "inconsistent_master_slave_saved_in_file"
+ * incon_m_s_svd_in_f storage format:
+ * 0-18bytes: timestamp
+ * 20byte: replication_mode
+ * 22-24bytes: request type
+ * 26byte: response error(if 0, master and slave all ok; 
+ *                                    if 1, master ok and slave err; 
+ *                                    if 2, master err and slave ok; 
+ *                                    if 3, master and slave all err).
+ * 28-30bytes: if master response ok, master response type; 
+ *                    if master response err, master errno.
+ * 32-34bytes: if slave response ok, slave response type; 
+ *                    if slave response err, slave errno.
+ * 19,21,25,27,31,35byte: blank character.
+ * 36-endbytes: key.
+ */
+#define incon_m_s_svd_in_f_len 40+MEMCACHE_MAX_KEY_LENGTH
+static uint8_t incon_m_s_svd_in_f[incon_m_s_svd_in_f_len];
+#endif //shenzheng 2015-4-17 replication pool
+
 /*
  * Return true, if the memcache command is a storage command, otherwise
  * return false
@@ -761,6 +785,10 @@ memcache_parse_rsp(struct msg *r)
         SW_ALMOST_DONE,             /* 15 */
         SW_SENTINEL
     } state;
+	
+#if 1 //shenzheng 2015-2-4 replication pool
+	//uint8_t *token = NULL;
+#endif //shenzheng 2015-4-3 replication pool
 
     state = r->state;
     b = STAILQ_LAST(&r->mhdr, mbuf, next);
@@ -943,14 +971,50 @@ memcache_parse_rsp(struct msg *r)
             if (ch != ' ') {
                 state = SW_KEY;
                 p = p - 1; /* go back by 1 byte */
+#if 1 //shenzheng 2015-1-20 replication pool
+				//token = NULL;
+				r->res_key_token = NULL;
+#endif //shenzheng 2015-4-3 replication pool
             }
 
             break;
 
         case SW_KEY:
+#if 1 //shenzheng 2015-1-20 replication pool
+			/*if(token == NULL)
+			{
+				token = p;
+			}
+			*/
+			if(r->res_key_token == NULL)
+			{
+				r->res_key_token = p;
+			}
+#endif //shenzheng 2015-4-3 replication pool
             if (ch == ' ') {
                 /* r->token = NULL; */
                 state = SW_SPACES_BEFORE_FLAGS;
+#if 1 //shenzheng 2015-1-20 replication pool
+				struct keypos *kpos;
+
+				kpos = array_push(r->keys);
+				if (kpos == NULL) {
+					goto error;
+				}
+				//ASSERT(token != NULL);
+				//ASSERT(token >= b->pos && token < b->last);
+				//kpos->start = token;
+
+				ASSERT(r->res_key_token != NULL);
+				ASSERT(r->res_key_token >= b->pos && r->res_key_token < b->last);
+				kpos->start = r->res_key_token;
+				
+				kpos->end = p;
+
+				ASSERT(kpos->start >= b->pos && kpos->start < b->last);
+				ASSERT(kpos->end >= b->pos && kpos->end < b->last);
+				//kpos->end_mbuf = b;
+#endif //shenzheng 2015-4-3 replication pool
             }
 
             break;
@@ -1017,6 +1081,10 @@ memcache_parse_rsp(struct msg *r)
                 /* val_start <- p + 1 */
                 state = SW_VAL;
                 r->token = NULL;
+#if 1 //shenzheng 2015-3-31 replication pool
+				//token = NULL;
+				r->res_key_token = NULL;
+#endif //shenzheng 2015-4-3 replication pool
                 break;
 
             default:
@@ -1146,6 +1214,20 @@ memcache_parse_rsp(struct msg *r)
     if (b->last == b->end && r->token != NULL) {
         if (state <= SW_RUNTO_VAL || state == SW_CRLF || state == SW_ALMOST_DONE) {
             r->state = SW_START;
+
+#if 1 //shenzheng 2015-2-4 replication pool
+			//if (token != NULL)
+			if(r->res_key_token != NULL)
+			{
+				ASSERT(array_n(r->keys) > 0);
+				struct keypos *kpos;
+				kpos = array_pop(r->keys);
+				ASSERT(kpos != NULL);
+				r->res_key_token = NULL;
+				//nc_free(kpos);
+				//kpos = NULL;
+			}
+#endif //shenzheng 2015-4-3 replication pool
         }
 
         r->pos = r->token;
@@ -1168,6 +1250,10 @@ done:
     r->state = SW_START;
     r->token = NULL;
     r->result = MSG_PARSE_OK;
+
+#if 1 //shenzheng 2015-4-3 replication pool
+	r->res_key_token = NULL;
+#endif //shenzheng 2015-4-3 replication pool
 
     log_hexdump(LOG_VERB, b->pos, mbuf_length(b), "parsed rsp %"PRIu64" res %d "
                 "type %d state %d rpos %d of %d", r->id, r->result, r->type,
@@ -1420,6 +1506,11 @@ memcache_copy_bulk(struct msg *dst, struct msg *src)
     }
     p = mbuf->pos;
 
+#if 1 //shenzheng 2015-2-3 replication pool
+	msg_print(src, LOG_DEBUG);
+	//log_debug(LOG_DEBUG, "p: %s", p);
+#endif //shenzheng 2015-2-3 replication pool
+
     /* get : VALUE key 0 len\r\nval\r\n */
     /* gets: VALUE key 0 len cas\r\nval\r\n */
 
@@ -1527,3 +1618,1864 @@ memcache_reply(struct msg *r)
     return NC_OK;
 }
 
+#if 1 //shenzheng 2015-1-15 replication pool
+rstatus_t
+memcache_handle_result_old(struct msg *r)
+{	
+
+	struct msg *msg_m, *pmsg_m;	/* master msg and peer msg*/
+	msg_m = r;
+	ASSERT(msg_m->request);
+	ASSERT(msg_m->frag_id == 0);
+	pmsg_m = msg_m->peer;
+	if(r->server_pool_id == -2)
+	{
+		ASSERT(r->type == MSG_REQ_MC_SET);
+		ASSERT(r->replication_mode != 0);
+		struct mbuf *mbuf_elem;
+		int i;
+		uint8_t ch;
+		char command_msg[300], result_msg[100];
+		int command_msg_len = 0;
+		uint32_t result_msg_len = 0;
+		if(msg_m->error)
+		{
+			char *err = strerror(msg_m->err);
+			result_msg_len = strlen(err);
+			if(result_msg_len >= 100)
+			{
+				result_msg_len = 99;
+			}
+
+			strncpy(result_msg, err, result_msg_len);
+		}
+		else
+		{
+			if(pmsg_m->type == MSG_RSP_MC_STORED)
+			{
+				return NC_OK;
+			}
+			STAILQ_FOREACH(mbuf_elem, &pmsg_m->mhdr, next) {
+				if(result_msg_len >= 100)
+				{
+					result_msg[99] = '\0';
+					break;
+				}
+				for(i = 0; i < mbuf_elem->last - mbuf_elem->start; i++)
+				{	
+					if(result_msg_len > 100)
+					{
+						result_msg[99] = '\0';
+						break;
+					}
+					ch = *(mbuf_elem->start + i);
+					if(ch == LF || ch == CR)
+					{
+						result_msg[result_msg_len ++] = ' ';
+					}
+					else
+					{
+						result_msg[result_msg_len ++] = ch;
+					}
+				}
+			}
+		}
+
+		if(result_msg_len < 100)
+		{
+			result_msg[result_msg_len] = '\0';
+		}
+		for(i = result_msg_len - 1; i >0; i --)
+		{
+			if(result_msg[i] == ' ')
+			{
+				result_msg[i] = '\0';
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		
+		STAILQ_FOREACH(mbuf_elem, &msg_m->mhdr, next) {
+			if(command_msg_len >= 300)
+			{
+				command_msg[299] = '\0';
+				break;
+			}
+			for(i = 0; i < mbuf_elem->last - mbuf_elem->start; i++)
+			{	
+				if(command_msg_len > 300)
+				{
+					command_msg[299] = '\0';
+					break;
+				}
+				ch = *(mbuf_elem->start + i);
+				if(ch == LF || ch == CR)
+				{
+					command_msg[command_msg_len ++] = ' ';
+				}
+				else
+				{
+					command_msg[command_msg_len ++] = ch;
+				}
+			}
+		}
+		if(command_msg_len < 300)
+		{
+			command_msg[command_msg_len] = '\0';
+		}
+		for(i = command_msg_len - 1; i >0; i --)
+		{
+			if(command_msg[i] == ' ')
+			{
+				command_msg[i] = '\0';
+			}
+			else
+			{
+				break;
+			}
+		}
+		
+		loga("warning: command '%.*s' for write back to master pool error: '%.*s'.", 
+			command_msg_len, command_msg, result_msg_len, result_msg);		
+		return NC_OK;
+	}
+	
+	ASSERT(msg_m->nreplication_msgs >= 0);
+	if(msg_m->nreplication_msgs == 0)
+	{
+		return NC_OK;
+	}
+	if(msg_m->frag_id)
+	{
+		return NC_OK;
+	}
+	if(msg_m->replication_mode == 0)
+	{
+		return NC_OK;
+	}
+	else if(msg_m->replication_mode == 1)
+	{
+		if(!msg_m->self_done || !replication_msgs_done(msg_m))
+		{
+			return NC_OK;
+		}
+	}
+	struct msg *msg_s, *pmsg_s;	/* slave msg, peer msg */
+	struct msg *msg_tmp;
+	
+	ASSERT(msg_m->server_pool_id == -1);
+	ASSERT(msg_m->nreplication_msgs > 0);
+	ASSERT(msg_m->replication_msgs != NULL);
+	msg_s = msg_m->replication_msgs[0];
+	ASSERT(msg_s != NULL);
+	pmsg_s = msg_s->peer;
+	ASSERT(msg_m->type == msg_s->type);
+	
+	log_debug(LOG_DEBUG, "memcache_handle_result real execute!");
+	if(msg_s->error && !msg_m->error)
+	{
+		
+	}
+	else if(!msg_s->error && !msg_m->error)
+	{
+		ASSERT(pmsg_m != NULL);
+		ASSERT(pmsg_s != NULL);
+		if(pmsg_m->type != pmsg_s->type)
+		{
+			switch(msg_m->type)
+			{
+				case MSG_REQ_MC_SET:
+				case MSG_REQ_MC_CAS:
+				case MSG_REQ_MC_ADD:
+				case MSG_REQ_MC_REPLACE:
+				case MSG_REQ_MC_APPEND:
+				case MSG_REQ_MC_PREPEND:
+					if(pmsg_s->type == MSG_RSP_MC_STORED)
+					{
+						return NC_OK;
+					}
+					break;
+				case MSG_REQ_MC_DELETE:
+					if(pmsg_s->type == MSG_RSP_MC_DELETED)
+					{
+						return NC_OK;
+					}
+					break;
+				case MSG_REQ_MC_INCR:
+				case MSG_REQ_MC_DECR:
+					if(pmsg_s->type == MSG_RSP_MC_NUM)
+					{
+						return NC_OK;
+					}
+					break;
+				case MSG_REQ_MC_QUIT:
+					log_error("error: REQ_MC_QUIT can not be used here!");
+					return NC_ERROR;
+					break;
+				default:
+					return NC_OK;
+					break;	
+			}
+		}
+		else
+		{
+			return NC_OK;
+		}
+	}
+	else
+	{
+		return NC_OK;
+	}
+
+	if(msg_m->replication_mode == 1)
+	{
+
+		struct mbuf *mbuf_elem;
+		int i;
+		uint8_t ch;
+		char command_msg[300], result_msg[100];
+		int command_msg_len = 0;
+		uint32_t result_msg_len = 0;
+		STAILQ_FOREACH(mbuf_elem, &msg_m->mhdr, next) {
+			if(command_msg_len >= 300)
+			{
+				command_msg[299] = '\0';
+				break;
+			}
+			for(i = 0; i < mbuf_elem->last - mbuf_elem->start; i++)
+			{	
+				if(command_msg_len > 300)
+				{
+					command_msg[299] = '\0';
+					break;
+				}
+				ch = *(mbuf_elem->start + i);
+				if(ch == LF || ch == CR)
+				{
+					command_msg[command_msg_len ++] = ' ';
+				}
+				else
+				{
+					command_msg[command_msg_len ++] = ch;
+				}
+			}
+		}
+		if(command_msg_len < 300)
+		{
+			command_msg[command_msg_len] = '\0';
+		}
+		for(i = command_msg_len - 1; i >0; i --)
+		{
+			if(command_msg[i] == ' ')
+			{
+				command_msg[i] = '\0';
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		if(msg_s->error)
+		{
+			char *err = strerror(msg_s->err);
+			result_msg_len = strlen(err);
+			if(result_msg_len >= 100)
+			{
+				result_msg_len = 99;
+			}
+
+			strncpy(result_msg, err, result_msg_len);
+		}
+		else
+		{
+			STAILQ_FOREACH(mbuf_elem, &pmsg_s->mhdr, next) {
+				if(result_msg_len >= 100)
+				{
+					result_msg[99] = '\0';
+					break;
+				}
+				for(i = 0; i < mbuf_elem->last - mbuf_elem->start; i++)
+				{	
+					if(result_msg_len > 100)
+					{
+						result_msg[99] = '\0';
+						break;
+					}
+					ch = *(mbuf_elem->start + i);
+					if(ch == LF || ch == CR)
+					{
+						result_msg[result_msg_len ++] = ' ';
+					}
+					else
+					{
+						result_msg[result_msg_len ++] = ch;
+					}
+				}
+			}
+		}
+		if(result_msg_len < 100)
+		{
+			result_msg[result_msg_len] = '\0';
+		}
+		for(i = result_msg_len - 1; i >0; i --)
+		{
+			if(result_msg[i] == ' ')
+			{
+				result_msg[i] = '\0';
+			}
+			else
+			{
+				break;
+			}
+		}
+		
+		loga("warning: response of command '%.*s' is '%.*s' in slave pool, but not same response in master.", 
+			command_msg_len, command_msg, result_msg_len, result_msg);
+		return NC_OK;
+	}
+	else if(msg_m->replication_mode == 2)
+	{
+		log_debug(LOG_DEBUG, "move slave msg to master.");
+		struct conn *conn;
+		conn = msg_m->owner;
+		msg_tmp = TAILQ_PREV(msg_m, msg_tqh, c_tqe);
+		TAILQ_REMOVE(&conn->omsg_q, msg_m, c_tqe);
+		if(msg_tmp == NULL)
+		{
+			TAILQ_INSERT_HEAD(&conn->omsg_q, msg_s, c_tqe);
+		}
+		else
+		{
+			TAILQ_INSERT_AFTER(&conn->omsg_q, msg_tmp, msg_s, c_tqe);
+		}
+		ASSERT(msg_m->master_msg == NULL);
+		ASSERT(msg_s->nreplication_msgs == -1);
+		ASSERT(msg_s->replication_msgs == NULL);
+		msg_s->replication_msgs = msg_m->replication_msgs;
+		msg_m->replication_msgs = NULL;
+		msg_s->replication_msgs[0] = msg_m;
+		msg_s->nreplication_msgs = msg_m->nreplication_msgs;
+		msg_m->nreplication_msgs = -1;
+		msg_m->master_msg = msg_s;
+		msg_s->master_msg = NULL;
+		msg_s->server_pool_id = -1;
+		msg_m->server_pool_id = 0;
+		return NC_OK;
+	}
+	else
+	{
+		loga("error: can not reach here.");
+	}
+	return NC_OK;
+}
+
+rstatus_t
+memcache_handle_result(struct context *ctx, struct conn *conn, struct msg *r)
+{	
+
+	struct msg *msg_m, *pmsg_m;	/* master msg and peer msg*/
+	msg_m = r;
+	ASSERT(msg_m->request);
+	ASSERT(msg_m->frag_id == 0);
+	pmsg_m = msg_m->peer;
+	if(r->server_pool_id == -2)
+	{
+		ASSERT(r->type == MSG_REQ_MC_SET);
+		ASSERT(r->replication_mode != 0);
+		struct mbuf *mbuf_elem;
+		int i;
+		uint8_t ch;
+		char command_msg[300], result_msg[100];
+		int command_msg_len = 0;
+		uint32_t result_msg_len = 0;
+		if(msg_m->error)
+		{
+			char *err = strerror(msg_m->err);
+			result_msg_len = strlen(err);
+			if(result_msg_len >= 100)
+			{
+				result_msg_len = 99;
+			}
+
+			strncpy(result_msg, err, result_msg_len);
+		}
+		else
+		{
+			if(pmsg_m->type == MSG_RSP_MC_STORED)
+			{
+				return NC_OK;
+			}
+			STAILQ_FOREACH(mbuf_elem, &pmsg_m->mhdr, next) {
+				if(result_msg_len >= 100)
+				{
+					result_msg[99] = '\0';
+					break;
+				}
+				for(i = 0; i < mbuf_elem->last - mbuf_elem->start; i++)
+				{	
+					if(result_msg_len > 100)
+					{
+						result_msg[99] = '\0';
+						break;
+					}
+					ch = *(mbuf_elem->start + i);
+					if(ch == LF || ch == CR)
+					{
+						result_msg[result_msg_len ++] = ' ';
+					}
+					else
+					{
+						result_msg[result_msg_len ++] = ch;
+					}
+				}
+			}
+		}
+
+		if(result_msg_len < 100)
+		{
+			result_msg[result_msg_len] = '\0';
+		}
+		for(i = result_msg_len - 1; i >0; i --)
+		{
+			if(result_msg[i] == ' ')
+			{
+				result_msg[i] = '\0';
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		
+		STAILQ_FOREACH(mbuf_elem, &msg_m->mhdr, next) {
+			if(command_msg_len >= 300)
+			{
+				command_msg[299] = '\0';
+				break;
+			}
+			for(i = 0; i < mbuf_elem->last - mbuf_elem->start; i++)
+			{	
+				if(command_msg_len > 300)
+				{
+					command_msg[299] = '\0';
+					break;
+				}
+				ch = *(mbuf_elem->start + i);
+				if(ch == LF || ch == CR)
+				{
+					command_msg[command_msg_len ++] = ' ';
+				}
+				else
+				{
+					command_msg[command_msg_len ++] = ch;
+				}
+			}
+		}
+		if(command_msg_len < 300)
+		{
+			command_msg[command_msg_len] = '\0';
+		}
+		for(i = command_msg_len - 1; i >0; i --)
+		{
+			if(command_msg[i] == ' ')
+			{
+				command_msg[i] = '\0';
+			}
+			else
+			{
+				break;
+			}
+		}
+		
+		loga("warning: command '%.*s' for write back to master pool error: '%.*s'.", 
+			command_msg_len, command_msg, result_msg_len, result_msg);		
+		return NC_OK;
+	}
+	
+	ASSERT(msg_m->nreplication_msgs >= 0);
+	if(msg_m->nreplication_msgs == 0)
+	{
+		return NC_OK;
+	}
+	if(msg_m->frag_id)
+	{
+		return NC_OK;
+	}
+	if(msg_m->replication_mode == 0)
+	{
+		return NC_OK;
+	}
+	else if(msg_m->replication_mode == 1)
+	{
+		if(!msg_m->self_done || !replication_msgs_done(msg_m))
+		{
+			return NC_OK;
+		}
+	}
+	struct msg *msg_s, *pmsg_s;	/* slave msg, peer msg */
+	struct msg *msg_tmp;
+	
+	ASSERT(msg_m->server_pool_id == -1);
+	ASSERT(msg_m->nreplication_msgs > 0);
+	ASSERT(msg_m->replication_msgs != NULL);
+	msg_s = msg_m->replication_msgs[0];
+	ASSERT(msg_s != NULL);
+	pmsg_s = msg_s->peer;
+	ASSERT(msg_m->type == msg_s->type);
+	
+	log_debug(LOG_DEBUG, "memcache_handle_result real execute!");
+
+	msg_print(pmsg_m, LOG_DEBUG);
+	msg_print(pmsg_s, LOG_DEBUG);
+	if(!msg_content_cmp(pmsg_m, pmsg_s))
+	{
+		log_debug(LOG_DEBUG, "pmsg_m != pmsg_s");
+	}
+	else
+	{
+		log_debug(LOG_DEBUG, "pmsg_m == pmsg_s");
+	}
+
+	if(msg_m->replication_mode == 1)
+	{
+		uint16_t type;
+		if(!msg_m->error && !msg_s->error)	//all ok
+		{
+			if(pmsg_m->type != pmsg_s->type)
+			{
+				incon_m_s_svd_in_f[26] = '0';
+
+				ASSERT(pmsg_m->type < 999);
+				ASSERT(pmsg_s->type < 999);
+				type = pmsg_m->type;
+				incon_m_s_svd_in_f[28] = type/100 + '0';
+				type = type%100;
+				incon_m_s_svd_in_f[29] = type/10 + '0';
+				incon_m_s_svd_in_f[30] = type%10 + '0';
+
+				type = pmsg_s->type;
+				incon_m_s_svd_in_f[32] = type/100 + '0';
+				type = type%100;
+				incon_m_s_svd_in_f[33] = type/10 + '0';
+				incon_m_s_svd_in_f[34] = type%10 + '0';
+				
+			}
+			else if((msg_m->type == MSG_REQ_MC_INCR || msg_m->type == MSG_REQ_MC_DECR) 
+				&& pmsg_m->type == MSG_RSP_MC_NUM && !msg_content_cmp(pmsg_m, pmsg_s))
+			{
+				incon_m_s_svd_in_f[26] = '0';
+
+				ASSERT(pmsg_m->type < 999);
+				ASSERT(pmsg_s->type < 999);
+				type = pmsg_m->type;
+				incon_m_s_svd_in_f[28] = type/100 + '0';
+				type = type%100;
+				incon_m_s_svd_in_f[29] = type/10 + '0';
+				incon_m_s_svd_in_f[30] = type%10 + '0';
+
+				type = pmsg_s->type;
+				incon_m_s_svd_in_f[32] = type/100 + '0';
+				type = type%100;
+				incon_m_s_svd_in_f[33] = type/10 + '0';
+				incon_m_s_svd_in_f[34] = type%10 + '0';
+			}
+			else
+			{
+				return NC_OK;
+			}
+		}
+		else if(!msg_m->error && msg_s->error)	//master ok; slave err
+		{
+			incon_m_s_svd_in_f[26] = '1';
+
+			ASSERT(pmsg_m->type < 999);
+			ASSERT(msg_s->err < 999);
+			type = pmsg_m->type;
+			incon_m_s_svd_in_f[28] = type/100 + '0';
+			type = type%100;
+			incon_m_s_svd_in_f[29] = type/10 + '0';
+			incon_m_s_svd_in_f[30] = type%10 + '0';
+
+			type = msg_s->err;
+			incon_m_s_svd_in_f[32] = type/100 + '0';
+			type = type%100;
+			incon_m_s_svd_in_f[33] = type/10 + '0';
+			incon_m_s_svd_in_f[34] = type%10 + '0';
+		}
+		else if(msg_m->error && !msg_s->error)	//master err; slave ok
+		{
+			incon_m_s_svd_in_f[26] = '2';
+
+			ASSERT(msg_m->err < 999);
+			ASSERT(pmsg_s->type < 999);
+			type = msg_m->err;
+			incon_m_s_svd_in_f[28] = type/100 + '0';
+			type = type%100;
+			incon_m_s_svd_in_f[29] = type/10 + '0';
+			incon_m_s_svd_in_f[30] = type%10 + '0';
+
+			type = pmsg_s->type;
+			incon_m_s_svd_in_f[32] = type/100 + '0';
+			type = type%100;
+			incon_m_s_svd_in_f[33] = type/10 + '0';
+			incon_m_s_svd_in_f[34] = type%10 + '0';
+		}
+		else if(msg_m->err != msg_s->err)	//all err and errs are different
+		{
+			incon_m_s_svd_in_f[26] = '3';
+
+			ASSERT(msg_m->err < 999);
+			ASSERT(msg_s->err < 999);
+			type = msg_m->err;
+			incon_m_s_svd_in_f[28] = type/100 + '0';
+			type = type%100;
+			incon_m_s_svd_in_f[29] = type/10 + '0';
+			incon_m_s_svd_in_f[30] = type%10 + '0';
+
+			type = msg_s->err;
+			incon_m_s_svd_in_f[32] = type/100 + '0';
+			type = type%100;
+			incon_m_s_svd_in_f[33] = type/10 + '0';
+			incon_m_s_svd_in_f[34] = type%10 + '0';
+		}
+		else
+		{
+			return NC_OK;
+		}
+
+		ASSERT(conn != NULL && !conn->proxy);
+		struct server_pool *sp;
+		if(conn->client)
+		{
+			sp = conn->owner;
+#if 1 //shenzheng 2015-5-15 config-reload
+			//if this conn move from replication pool to none replication pool,
+			//sp->inconsistent_log will become NULL.
+			if(sp->inconsistent_log == NULL)
+			{
+				return NC_OK;
+			}
+#endif //shenzheng 2015-5-15 config-reload
+		}
+		else
+		{
+			struct server *server = conn->owner;
+			ASSERT(server != NULL);
+			sp = server->owner;
+			ASSERT(sp != NULL);
+			if(sp->sp_master != NULL)
+			{
+				sp = sp->sp_master;
+			}
+		}
+		ASSERT(sp != NULL);
+		struct array *keys = msg_m->keys;
+		ASSERT(keys != NULL && array_n(keys) == 1);
+		struct keypos *key = array_get(keys, 0);
+		ASSERT(key != NULL);
+		uint32_t key_len = key->end - key->start;
+		ASSERT(key_len >= 0);
+		struct string string_tmp;
+		struct timeval tv;
+		int len;
+		gettimeofday(&tv, NULL);
+		len = nc_strftime(incon_m_s_svd_in_f, incon_m_s_svd_in_f_len, "%Y-%m-%d_%H:%M:%S ", localtime(&tv.tv_sec));
+		ASSERT(len == 20);
+
+		string_init(&string_tmp);
+		nc_itos(&string_tmp, msg_m->replication_mode);
+
+		if(msg_m->replication_mode == 0)
+		{
+			incon_m_s_svd_in_f[len++] = '0';
+		}
+		else if(msg_m->replication_mode == 1)
+		{
+			incon_m_s_svd_in_f[len++] = '1';
+		}
+		else if(msg_m->replication_mode == 2)
+		{
+			incon_m_s_svd_in_f[len++] = '2';
+		}
+		else
+		{
+			incon_m_s_svd_in_f[len++] = 'n';
+		}
+
+		incon_m_s_svd_in_f[len++] = ' ';
+
+		ASSERT(msg_m->type < 999);
+
+		type = msg_m->type;
+		incon_m_s_svd_in_f[len++] = type/100 + '0';
+		type = type%100;
+		incon_m_s_svd_in_f[len++] = type/10 + '0';
+		incon_m_s_svd_in_f[len++] = type%10 + '0';
+
+		incon_m_s_svd_in_f[len++] = ' ';
+
+		ASSERT(len == 26);
+
+		incon_m_s_svd_in_f[27] = ' ';
+		incon_m_s_svd_in_f[31] = ' ';
+		incon_m_s_svd_in_f[35] = ' ';
+		len = 36;
+		ASSERT(key_len < incon_m_s_svd_in_f_len - 36);
+		nc_memcpy(incon_m_s_svd_in_f + len, key->start, key_len);
+
+		incon_m_s_svd_in_f[len + key_len] = '\n';
+		incon_m_s_svd_in_f[len + key_len + 1] = '\0';
+
+		//log_debug(LOG_WARN, "incon_m_s_svd_in_f : %s", incon_m_s_svd_in_f);
+		storage_in_inconsistent_log(sp, incon_m_s_svd_in_f);
+		stats_pool_incr(ctx, sp, inconsistent);
+		return NC_OK;
+	}
+	else if(msg_m->replication_mode == 2)
+	{
+		if(msg_s->error && !msg_m->error)
+		{
+			
+		}
+		else if(!msg_s->error && !msg_m->error)
+		{
+			ASSERT(pmsg_m != NULL);
+			ASSERT(pmsg_s != NULL);
+			if(pmsg_m->type != pmsg_s->type)
+			{
+				switch(msg_m->type)
+				{
+					case MSG_REQ_MC_SET:
+					case MSG_REQ_MC_CAS:
+					case MSG_REQ_MC_ADD:
+					case MSG_REQ_MC_REPLACE:
+					case MSG_REQ_MC_APPEND:
+					case MSG_REQ_MC_PREPEND:
+						if(pmsg_s->type == MSG_RSP_MC_STORED)
+						{
+							return NC_OK;
+						}
+						break;
+					case MSG_REQ_MC_DELETE:
+						if(pmsg_s->type == MSG_RSP_MC_DELETED)
+						{
+							return NC_OK;
+						}
+						break;
+					case MSG_REQ_MC_INCR:
+					case MSG_REQ_MC_DECR:
+						if(pmsg_s->type == MSG_RSP_MC_NUM)
+						{
+							return NC_OK;
+						}
+						break;
+					case MSG_REQ_MC_QUIT:
+						log_error("error: REQ_MC_QUIT can not be used here!");
+						return NC_ERROR;
+						break;
+					default:
+						return NC_OK;
+						break;	
+				}
+			}
+			else
+			{
+				return NC_OK;
+			}
+		}
+		else
+		{
+			return NC_OK;
+		}
+		
+		log_debug(LOG_DEBUG, "move slave msg to master.");
+		struct conn *conn;
+		conn = msg_m->owner;
+		msg_tmp = TAILQ_PREV(msg_m, msg_tqh, c_tqe);
+		TAILQ_REMOVE(&conn->omsg_q, msg_m, c_tqe);
+		if(msg_tmp == NULL)
+		{
+			TAILQ_INSERT_HEAD(&conn->omsg_q, msg_s, c_tqe);
+		}
+		else
+		{
+			TAILQ_INSERT_AFTER(&conn->omsg_q, msg_tmp, msg_s, c_tqe);
+		}
+		ASSERT(msg_m->master_msg == NULL);
+		ASSERT(msg_s->nreplication_msgs == -1);
+		ASSERT(msg_s->replication_msgs == NULL);
+		msg_s->replication_msgs = msg_m->replication_msgs;
+		msg_m->replication_msgs = NULL;
+		msg_s->replication_msgs[0] = msg_m;
+		msg_s->nreplication_msgs = msg_m->nreplication_msgs;
+		msg_m->nreplication_msgs = -1;
+		msg_m->master_msg = msg_s;
+		msg_s->master_msg = NULL;
+		msg_s->server_pool_id = -1;
+		msg_m->server_pool_id = 0;
+		return NC_OK;
+	}
+	else
+	{
+		loga("error: can not reach here.");
+	}
+	return NC_OK;
+}
+
+
+rstatus_t
+memcache_replication_penetrate(struct msg *pmsg, 
+				struct msg *msg, struct msg_tqh *frag_msgq)
+{
+	rstatus_t status;
+	struct conn *c_conn;
+	struct server_pool *sp, **replication_sp;
+	struct keypos *kpos_pmsg, *kpos_msg;
+	size_t klen_pmsg, klen_msg;
+	bool equal_flag;
+	uint32_t i, j, k;
+	uint32_t array_len;
+	uint32_t idx_s;		/* slave pool idx */
+	struct msg *frag_owner;
+	struct msg **sub_msgs;
+	struct msg *sub_msg;
+	//struct msg *pre_msg;
+	struct array *keys_rep;
+	uint32_t keys_rep_num;
+	int server_pool_id;
+	
+
+	c_conn = pmsg->owner;
+	ASSERT(pmsg->request);
+	ASSERT(c_conn != NULL);
+	ASSERT(c_conn->client && !c_conn->proxy);
+
+	
+	if(msg != NULL)
+	{
+		ASSERT(!msg->request);
+		keys_rep = msg->keys;
+		ASSERT(keys_rep != NULL);
+		keys_rep_num = array_n(keys_rep);
+	}
+	else
+	{
+		keys_rep_num = 0;
+		keys_rep = NULL;
+	}
+	
+	sp = c_conn->owner;
+	frag_owner = pmsg->frag_owner;
+	ASSERT(frag_owner != NULL);
+
+	server_pool_id = pmsg->server_pool_id;
+	
+	replication_sp = array_get(&sp->replication_pools, server_pool_id);
+	ASSERT(*replication_sp != NULL);
+	sub_msgs = nc_zalloc((*replication_sp)->ncontinuum * sizeof(*sub_msgs));
+	if (sub_msgs == NULL) {
+		return NC_ENOMEM;
+	}
+	msg_print(pmsg, LOG_DEBUG);
+	//pre_msg = pmsg;
+	array_len = array_n(pmsg->keys);
+	for(i = 0; i < array_len; i ++)
+	{
+		kpos_pmsg = array_get(pmsg->keys, i);
+
+		if(kpos_pmsg->start)
+		
+		klen_pmsg = kpos_pmsg->end - kpos_pmsg->start;
+		equal_flag = false;
+		for(j = 0; j < keys_rep_num; j ++)
+		{
+			kpos_msg = array_get(keys_rep, j);
+			klen_msg = kpos_msg->end - kpos_msg->start;
+			if(klen_pmsg != klen_msg)
+			{
+				continue;
+			}
+			if(memcmp(kpos_pmsg->start, kpos_msg->start, klen_pmsg) == 0)
+			{
+				equal_flag = true;
+				break;
+			}
+		}
+		if(!equal_flag)
+		{
+			idx_s = server_pool_idx(*replication_sp, kpos_pmsg->start, klen_pmsg);
+
+			if (sub_msgs[idx_s] == NULL) {
+				sub_msgs[idx_s] = msg_get(pmsg->owner, pmsg->request, pmsg->redis);
+				if (sub_msgs[idx_s] == NULL) {
+					status = NC_ENOMEM;
+					goto error;
+				}
+			}
+			ASSERT(frag_owner->frag_seq != NULL);
+
+			for(k = 0; k < array_n(frag_owner->keys); k ++)
+			{
+				kpos_msg = array_get(frag_owner->keys, k);
+				klen_msg = kpos_msg->end - kpos_msg->start;
+				if(klen_pmsg != klen_msg)
+				{
+					continue;
+				}
+				if(memcmp(kpos_pmsg->start, kpos_msg->start, klen_pmsg) == 0)
+				{
+					equal_flag = true;
+					break;
+				}
+			}
+			
+			ASSERT(equal_flag);
+
+			sub_msg = frag_owner->frag_seq[k];
+			ASSERT(sub_msg != NULL);
+			ASSERT(sub_msg == pmsg);
+			sub_msg->narg --;
+			if(sub_msg->narg == 0)
+			{	
+				/*
+				pre_msg = TAILQ_PREV(sub_msg, msg_tqh, c_tqe);
+				TAILQ_REMOVE(&c_conn->omsg_q, sub_msg, c_tqe);
+
+				if(sub_msg == pmsg)
+				{
+					ASSERT( i == (array_len - 1) );
+				}
+				else
+				{
+					req_put(sub_msg);
+				}
+				*/
+				ASSERT(i == (array_len - 1));
+				
+			}
+			
+			frag_owner->frag_seq[k] = sub_msg = sub_msgs[idx_s];
+
+			sub_msg->narg++;
+			msg_print(sub_msg, LOG_DEBUG);
+			status = memcache_append_key(sub_msg, kpos_pmsg->start, klen_pmsg);
+			if (status != NC_OK) {
+				goto error;
+			}
+		}
+		
+	}
+
+	for (i = 0; i < (*replication_sp)->ncontinuum; i++) {	   /* prepend mget header, and forward it */
+		sub_msg = sub_msgs[i];
+		if (sub_msg == NULL) {
+			continue;
+		}
+
+		/* prepend get/gets */
+		if (frag_owner->type == MSG_REQ_MC_GET) {
+			status = msg_prepend(sub_msg, (uint8_t *)"get ", 4);
+		} else if (frag_owner->type == MSG_REQ_MC_GETS) {
+			status = msg_prepend(sub_msg, (uint8_t *)"gets ", 5);
+		}
+		
+		if (status != NC_OK) {
+			goto error;
+		}
+
+		/* append \r\n */
+		status = msg_append(sub_msg, (uint8_t *)CRLF, CRLF_LEN);
+		if (status != NC_OK) {
+			goto error;
+		}
+
+		sub_msg->type = frag_owner->type;
+		sub_msg->frag_id = frag_owner->frag_id;
+		sub_msg->frag_owner = frag_owner;
+		sub_msg->server_pool_id = server_pool_id;
+
+		TAILQ_INSERT_TAIL(frag_msgq, sub_msg, m_tqe);
+		//TAILQ_INSERT_TAIL(&conn->omsg_q, msg, c_tqe);
+
+		/*
+		ASSERT(pre_msg != NULL);
+		ASSERT(pre_msg->frag_id == sub_msg->frag_id);
+		
+		if(pre_msg == NULL)
+		{
+			TAILQ_INSERT_HEAD(&c_conn->omsg_q, sub_msg, c_tqe);
+		}
+		else
+		{
+			TAILQ_INSERT_AFTER(&c_conn->omsg_q, pre_msg, sub_msg, c_tqe);
+		}
+		*/
+		TAILQ_INSERT_AFTER(&c_conn->omsg_q, pmsg, sub_msg, c_tqe);
+		frag_owner->nfrag ++;
+	}
+
+	nc_free(sub_msgs);
+	return NC_OK;
+
+error:
+	for (i = 0; i < (*replication_sp)->ncontinuum; i++) 
+	{
+		sub_msg = sub_msgs[i];
+		if (sub_msg == NULL) {
+			continue;
+		}
+		for(k = 0; k < array_n(frag_owner->keys); k ++)
+		{
+			if(frag_owner->frag_seq[k] == sub_msg)
+			{
+				frag_owner->frag_seq[k] = NULL;
+			}
+		}
+		msg_put(sub_msg);
+	}
+	nc_free(sub_msgs);
+	return status;
+	
+}
+
+rstatus_t
+memcache_replication_write_back_old(struct context *ctx, struct msg *pmsg, struct msg *msg)
+{
+	if(array_n(msg->keys) == 0)
+	{
+		return NC_OK;
+	}
+
+	rstatus_t status;
+
+	struct conn *c_conn;
+	uint8_t *ch_from;
+	struct msg * msg_wb;	/* msg to write back  */
+	struct mbuf *mbuf_from;
+	struct mbuf *mbuf_to;
+	bool noreply_append_flag = false;
+	bool msg_copy_done = false;
+	bool space_flag = false;
+	uint8_t k = 0;
+	uint8_t str_noreply[8];
+	uint8_t str_space_zero[3] = {' ', '0', ' '};
+	uint32_t count_msg_wb = 0;	/* total count of msgs to write back */
+	uint8_t	crlf_counter = 0;	/* used for split muti value msg */
+	uint8_t space_counter = 0;
+	bool msg_begin = false;		/* true:at the begin of a msg */
+	
+	c_conn = pmsg->owner;
+	
+	ASSERT(pmsg->server_pool_id >= 0);
+	ASSERT(pmsg->request);
+	ASSERT(!msg->request);
+	ASSERT(msg->type == MSG_RSP_MC_END);
+	ASSERT(c_conn->client && !c_conn->proxy);
+
+
+	if(pmsg->replication_mode == 0)
+	{
+		str_noreply[0] = ' ';
+		str_noreply[1] = 'n';
+		str_noreply[2] = 'o';
+		str_noreply[3] = 'r';
+		str_noreply[4] = 'e';
+		str_noreply[5] = 'p';
+		str_noreply[6] = 'l';
+		str_noreply[7] = 'y';
+	}
+	else
+	{
+		noreply_append_flag = true;
+	}
+	
+	msg_wb = req_get(c_conn);
+	msg_wb->owner = c_conn;
+	//msg_wb->server_pool_id = pmsg->server_pool_id;
+	msg_wb->server_pool_id = -2;
+	/* prepend set */
+    status = msg_append(msg_wb, (uint8_t *)"set", 3);
+    if (status != NC_OK) {
+        nc_free(msg_wb);
+        return status;
+    }
+	mbuf_to = STAILQ_FIRST(&msg_wb->mhdr);
+	msg_wb->pos =  mbuf_to->pos;
+	
+	mbuf_from = STAILQ_FIRST(&msg->mhdr);
+	ch_from = mbuf_from->start;
+	ASSERT(*ch_from == 'V');
+	msg_begin = true;
+	do{
+		mbuf_to = STAILQ_LAST(&msg_wb->mhdr, mbuf, next);
+		if (mbuf_to == NULL || mbuf_full(mbuf_to)) {
+			mbuf_to = mbuf_get();
+			if (mbuf_to == NULL) {
+				req_put(msg_wb);
+				return NC_ENOMEM;
+			}
+			log_debug(LOG_DEBUG, "get new mbuf for msg_t");
+			mbuf_insert(&msg_wb->mhdr, mbuf_to);
+			msg_wb->pos = mbuf_to->pos;
+		}
+		ASSERT(mbuf_to->end - mbuf_to->last > 0);
+
+		for(; mbuf_to->last < mbuf_to->end;)
+		{
+			if(ch_from >= mbuf_from->last)
+			{
+				mbuf_from = STAILQ_NEXT(mbuf_from, next);
+				if(mbuf_from == NULL)
+				{
+					msg_copy_done = true;
+					break;
+				}
+				ch_from = mbuf_from->start;
+			}
+
+			if(crlf_counter == 0)
+			{
+				if(*ch_from == ' ' && space_flag == false)
+				{
+					space_flag = true;
+					space_counter ++;
+				}
+				else if(*ch_from != ' ' && space_flag == true)
+				{
+					space_flag = false;
+				}
+				else if(*ch_from == ' ' && space_flag == true)
+				{
+					ch_from ++;
+					continue;
+				}
+
+
+				switch(space_counter)
+				{
+				case 0:
+					ch_from ++;
+					break;
+				case 1:
+				case 2:
+					*mbuf_to->last = *ch_from;
+					ch_from ++;
+					mbuf_to->last ++;
+					break;
+				case 3:
+					if(k < 3)
+					{
+						*mbuf_to->last = str_space_zero[k];
+						k ++;
+						mbuf_to->last ++;
+					}
+					else
+					{
+						*mbuf_to->last = *ch_from;
+						ch_from ++;
+						mbuf_to->last ++;
+					}
+					break;
+				case 4:
+					ch_from ++;
+					break;
+				default:
+					log_error("error: program can not reach here!");
+					req_put(msg_wb);
+					NOT_REACHED();
+					return NC_ERROR;
+					break;
+				}
+
+				if(*ch_from == CR)
+				{
+					crlf_counter ++;	
+					k = 0;
+				}
+			}
+			else
+			{				
+				if(*ch_from == CR && !noreply_append_flag)
+				{
+					*mbuf_to->last = str_noreply[k];
+					k ++;
+					mbuf_to->last ++;
+					if(k >= 8)
+					{
+						noreply_append_flag = true;
+						k = 0;
+					}
+				}
+				else
+				{					
+					*mbuf_to->last = *ch_from;
+					ch_from ++;
+					mbuf_to->last ++;
+
+					if(*ch_from == CR)
+					{
+						crlf_counter ++;	
+					}
+				}
+				
+				if(*ch_from == LF && crlf_counter == 2)
+				{
+					*mbuf_to->last = *ch_from;
+					ch_from ++;
+					mbuf_to->last ++;
+					break;
+				}	
+			}
+		}
+		//log_debug(LOG_DEBUG, "msg_wb->pos : %s", msg_wb->pos);
+		msg_wb->parser(msg_wb);
+		switch (msg_wb->result) {
+		case MSG_PARSE_OK:
+			log_debug(LOG_DEBUG, "MSG_PARSE_OK and crlf_counter is %d", crlf_counter);
+			ASSERT(crlf_counter == 2);
+			crlf_counter = 0;
+			space_counter = 0;
+			space_flag = false;
+			if(pmsg->replication_mode == 0)
+			{
+				noreply_append_flag = false;
+			}
+
+			count_msg_wb ++;
+			req_forward(ctx, c_conn, msg_wb);
+			
+			if(count_msg_wb < array_n(msg->keys))
+			{			
+				msg_wb = req_get(c_conn);
+				msg_wb->owner = c_conn;
+				//msg_wb->server_pool_id = pmsg->server_pool_id;
+				msg_wb->server_pool_id = -2;
+				/* prepend set */
+    			status = msg_append(msg_wb, (uint8_t *)"set", 3);
+			    if (status != NC_OK) {
+			        nc_free(msg_wb);
+			        return status;
+			    }
+				mbuf_to = STAILQ_FIRST(&msg_wb->mhdr);
+				msg_wb->pos =  mbuf_to->pos;
+			}
+			else
+			{
+				//ASSERT(msg_copy_done);
+				msg_copy_done = true;
+			}
+		break;
+
+		case MSG_PARSE_REPAIR:
+			log_debug(LOG_DEBUG, "MSG_PARSE_REPAIR and crlf_counter is %d", crlf_counter);
+			ASSERT(crlf_counter < 2);
+			//status = msg_repair(NULL, c_conn, msg_wb);
+			struct mbuf *nbuf;
+		    nbuf = mbuf_split(&msg->mhdr, msg->pos, NULL, NULL);
+		    if (nbuf == NULL) {
+				req_put(msg_wb);
+		        return NC_ENOMEM;
+		    }
+		    mbuf_insert(&msg->mhdr, nbuf);
+		    msg->pos = nbuf->pos;
+		break;
+
+		case MSG_PARSE_AGAIN:
+			log_debug(LOG_DEBUG, "MSG_PARSE_AGAIN and crlf_counter is %d", crlf_counter);
+			ASSERT(crlf_counter <= 2);
+		break;
+
+		default:
+			req_put(msg_wb);
+			log_error("error: parse the replication msg error!");
+			return NC_ERROR;
+		break;
+		}
+	}
+	while(!msg_copy_done);
+
+	ASSERT(count_msg_wb == array_n(msg->keys));
+	
+	return NC_OK;
+}
+
+rstatus_t
+memcache_replication_write_back1(struct context *ctx, struct msg *pmsg, struct msg *msg)
+{
+	if(array_n(msg->keys) == 0)
+	{
+		return NC_OK;
+	}
+
+	rstatus_t status;
+
+	struct conn *c_conn;
+	uint8_t *ch_from;
+	struct msg * msg_wb;	/* msg to write back  */
+	struct mbuf *mbuf_from;
+	struct mbuf *mbuf_to;
+	bool noreply_append_flag = false;
+	bool msg_copy_done = false;
+	bool space_flag = false;
+	uint8_t k = 0;
+	uint8_t str_noreply[8];
+	uint8_t str_space_zero[3] = {' ', '0', ' '};
+	uint32_t count_msg_wb = 0;	/* total count of msgs to write back */
+	uint8_t	crlf_counter = 0;	/* used for split muti value msg */
+	uint8_t space_counter = 0;
+	bool msg_begin = false;		/* true:at the begin of a msg */
+	uint32_t value_len = 0;
+	
+	c_conn = pmsg->owner;
+	
+	ASSERT(pmsg->server_pool_id >= 0);
+	ASSERT(pmsg->request);
+	ASSERT(!msg->request);
+	ASSERT(msg->type == MSG_RSP_MC_END);
+	ASSERT(c_conn->client && !c_conn->proxy);
+
+
+	if(pmsg->replication_mode == 0)
+	{
+		str_noreply[0] = ' ';
+		str_noreply[1] = 'n';
+		str_noreply[2] = 'o';
+		str_noreply[3] = 'r';
+		str_noreply[4] = 'e';
+		str_noreply[5] = 'p';
+		str_noreply[6] = 'l';
+		str_noreply[7] = 'y';
+	}
+	else
+	{
+		noreply_append_flag = true;
+	}
+	
+	msg_wb = req_get(c_conn);
+	msg_wb->owner = c_conn;
+	//msg_wb->server_pool_id = pmsg->server_pool_id;
+	msg_wb->server_pool_id = -2;
+	/* prepend set */
+    status = msg_append(msg_wb, (uint8_t *)"set", 3);
+    if (status != NC_OK) {
+        nc_free(msg_wb);
+        return status;
+    }
+	mbuf_to = STAILQ_FIRST(&msg_wb->mhdr);
+	msg_wb->pos =  mbuf_to->pos;
+	
+	mbuf_from = STAILQ_FIRST(&msg->mhdr);
+	ch_from = mbuf_from->start;
+	ASSERT(*ch_from == 'V');
+	msg_begin = true;
+	do{
+		mbuf_to = STAILQ_LAST(&msg_wb->mhdr, mbuf, next);
+		if (mbuf_to == NULL || mbuf_full(mbuf_to)) {
+			mbuf_to = mbuf_get();
+			if (mbuf_to == NULL) {
+				req_put(msg_wb);
+				return NC_ENOMEM;
+			}
+			log_debug(LOG_DEBUG, "get new mbuf for msg_t");
+			mbuf_insert(&msg_wb->mhdr, mbuf_to);
+			msg_wb->pos = mbuf_to->pos;
+		}
+		ASSERT(mbuf_to->end - mbuf_to->last > 0);
+
+		for(; mbuf_to->last < mbuf_to->end;)
+		{
+			if(ch_from >= mbuf_from->last)
+			{
+				mbuf_from = STAILQ_NEXT(mbuf_from, next);
+				if(mbuf_from == NULL)
+				{
+					msg_copy_done = true;
+					break;
+				}
+				ch_from = mbuf_from->start;
+			}
+
+			if(crlf_counter == 0)
+			{
+				if(*ch_from == ' ' && space_flag == false)
+				{
+					space_flag = true;
+					space_counter ++;
+				}
+				else if(*ch_from != ' ' && space_flag == true)
+				{
+					space_flag = false;
+				}
+				else if(*ch_from == ' ' && space_flag == true)
+				{
+					ch_from ++;
+					continue;
+				}
+
+
+				switch(space_counter)
+				{
+				case 0:
+					ch_from ++;
+					break;
+				case 1:
+				case 2:
+					*mbuf_to->last = *ch_from;
+					ch_from ++;
+					mbuf_to->last ++;
+					break;
+				case 3:
+					if(k < 3)
+					{
+						*mbuf_to->last = str_space_zero[k];
+						k ++;
+						mbuf_to->last ++;
+					}
+					else
+					{
+						*mbuf_to->last = *ch_from;
+						ch_from ++;
+						mbuf_to->last ++;
+					}
+					break;
+				case 4:
+					ch_from ++;
+					break;
+				default:
+					log_error("error: program can not reach here!");
+					req_put(msg_wb);
+					NOT_REACHED();
+					return NC_ERROR;
+					break;
+				}
+
+				if(*(ch_from-1) == LF)
+				{
+					ASSERT(*(ch_from-2) == CR);
+					crlf_counter ++;
+					k = 0;
+					log_debug(LOG_DEBUG, "ch_from:%s",ch_from);
+					break;
+				}
+			}
+			else
+			{	
+
+				if(!noreply_append_flag)
+				{
+					*mbuf_to->last = str_noreply[k];
+					k ++;
+					mbuf_to->last ++;
+					if(k >= 8)
+					{
+						noreply_append_flag = true;
+						k = 0;
+					}
+				}
+				else if(value_len > 0)
+				{					
+					*mbuf_to->last = *ch_from;
+					ch_from ++;
+					mbuf_to->last ++;
+					value_len --;
+				}
+				else
+				{
+					ASSERT(value_len == 0);
+					if(*ch_from == LF)
+					{
+						ASSERT(*(ch_from-1) == CR);
+						*mbuf_to->last = *ch_from;
+						ch_from ++;
+						mbuf_to->last ++;
+						crlf_counter ++;
+						log_debug(LOG_DEBUG, "crlf_counter : %d", crlf_counter);
+						break;
+					}
+					log_debug(LOG_DEBUG, "ch_from:%d", *ch_from);
+					*mbuf_to->last = *ch_from;
+					ch_from ++;
+					mbuf_to->last ++;
+				}
+			}
+		}
+		//log_debug(LOG_DEBUG, "msg_wb->pos : %s", msg_wb->pos);
+		msg_wb->parser(msg_wb);
+		switch (msg_wb->result) {
+		case MSG_PARSE_OK:
+			log_debug(LOG_DEBUG, "MSG_PARSE_OK and crlf_counter is %d", crlf_counter);
+			msg_print(msg_wb, LOG_DEBUG);
+			ASSERT(crlf_counter == 2);
+			crlf_counter = 0;
+			space_counter = 0;
+			space_flag = false;
+			if(pmsg->replication_mode == 0)
+			{
+				noreply_append_flag = false;
+			}
+
+			count_msg_wb ++;
+			req_forward(ctx, c_conn, msg_wb);
+			
+			if(count_msg_wb < array_n(msg->keys))
+			{			
+				msg_wb = req_get(c_conn);
+				msg_wb->owner = c_conn;
+				//msg_wb->server_pool_id = pmsg->server_pool_id;
+				msg_wb->server_pool_id = -2;
+				/* prepend set */
+    			status = msg_append(msg_wb, (uint8_t *)"set", 3);
+			    if (status != NC_OK) {
+			        nc_free(msg_wb);
+			        return status;
+			    }
+				mbuf_to = STAILQ_FIRST(&msg_wb->mhdr);
+				msg_wb->pos =  mbuf_to->pos;
+			}
+			else
+			{
+				//ASSERT(msg_copy_done);
+				msg_copy_done = true;
+			}
+		break;
+
+		case MSG_PARSE_REPAIR:
+			log_debug(LOG_DEBUG, "MSG_PARSE_REPAIR and crlf_counter is %d", crlf_counter);
+			ASSERT(crlf_counter < 2);
+			//status = msg_repair(NULL, c_conn, msg_wb);
+			struct mbuf *nbuf;
+		    nbuf = mbuf_split(&msg->mhdr, msg->pos, NULL, NULL);
+		    if (nbuf == NULL) {
+				req_put(msg_wb);
+		        return NC_ENOMEM;
+		    }
+		    mbuf_insert(&msg->mhdr, nbuf);
+		    msg->pos = nbuf->pos;
+		break;
+
+		case MSG_PARSE_AGAIN:
+			log_debug(LOG_DEBUG, "MSG_PARSE_AGAIN and crlf_counter is %d", crlf_counter);
+			ASSERT(crlf_counter <= 2);
+		break;
+
+		default:
+			msg_print(msg_wb, LOG_DEBUG);
+			req_put(msg_wb);
+			log_error("error: parse the replication msg error!");
+			return NC_ERROR;
+		break;
+		}
+	}
+	while(!msg_copy_done);
+
+	ASSERT(count_msg_wb == array_n(msg->keys));
+	
+	return NC_OK;
+}
+
+
+rstatus_t
+memcache_replication_write_back(struct context *ctx, struct msg *pmsg, struct msg *msg)
+{
+	if(array_n(msg->keys) == 0)
+	{
+		return NC_OK;
+	}
+
+	rstatus_t status;
+
+	struct conn *c_conn;
+	uint8_t *ch_from;
+	struct msg * msg_wb;	/* msg to write back  */
+	struct mbuf *mbuf_from;
+	struct mbuf *mbuf_to;
+	bool noreply_append_flag = false;
+	bool msg_copy_done = false;
+	bool space_flag = false;
+	uint8_t extra_len = 0;
+	uint8_t k = 0;
+	uint8_t str_noreply[8];
+	uint8_t str_space_zero[3] = {' ', '0', ' '};
+	uint32_t count_msg_wb = 0;	/* total count of msgs to write back */
+	uint8_t	crlf_counter = 0;	/* used for split muti value msg */
+	uint8_t space_counter = 0;
+	bool msg_begin = false;		/* true:at the begin of a msg */
+	uint32_t vlen = 0;
+	uint32_t vlen_copied = 0;
+
+	
+	c_conn = pmsg->owner;
+	
+	ASSERT(pmsg->server_pool_id >= 0);
+	ASSERT(pmsg->request);
+	ASSERT(!msg->request);
+	ASSERT(msg->type == MSG_RSP_MC_END);
+	ASSERT(c_conn->client && !c_conn->proxy);
+
+
+	if(pmsg->replication_mode == 0)
+	{
+		str_noreply[0] = ' ';
+		str_noreply[1] = 'n';
+		str_noreply[2] = 'o';
+		str_noreply[3] = 'r';
+		str_noreply[4] = 'e';
+		str_noreply[5] = 'p';
+		str_noreply[6] = 'l';
+		str_noreply[7] = 'y';
+
+		//extra_len = 10;
+		extra_len = 4;
+	}
+	else
+	{
+		extra_len = 4;
+		noreply_append_flag = true;
+	}
+	
+	msg_wb = req_get(c_conn);
+	msg_wb->owner = c_conn;
+	//msg_wb->server_pool_id = pmsg->server_pool_id;
+	msg_wb->server_pool_id = -2;
+	/* prepend set */
+    status = msg_append(msg_wb, (uint8_t *)"set", 3);
+    if (status != NC_OK) {
+        nc_free(msg_wb);
+        return status;
+    }
+	mbuf_to = STAILQ_FIRST(&msg_wb->mhdr);
+	msg_wb->pos =  mbuf_to->pos;
+	
+	mbuf_from = STAILQ_FIRST(&msg->mhdr);
+	ch_from = mbuf_from->start;
+	ASSERT(*ch_from == 'V');
+	msg_begin = true;
+	do{
+		mbuf_to = STAILQ_LAST(&msg_wb->mhdr, mbuf, next);
+		if (mbuf_to == NULL || mbuf_full(mbuf_to)) {
+			mbuf_to = mbuf_get();
+			if (mbuf_to == NULL) {
+				req_put(msg_wb);
+				return NC_ENOMEM;
+			}
+			log_debug(LOG_DEBUG, "get new mbuf for msg_t");
+			mbuf_insert(&msg_wb->mhdr, mbuf_to);
+			//msg_wb->mlen += mbuf_length(mbuf_to);
+			msg_wb->pos = mbuf_to->pos;
+		}
+		ASSERT(mbuf_to->end - mbuf_to->last > 0);
+
+		for(; mbuf_to->last < mbuf_to->end;)
+		{
+			if(ch_from >= mbuf_from->last)
+			{
+				mbuf_from = STAILQ_NEXT(mbuf_from, next);
+				if(mbuf_from == NULL)
+				{
+					msg_copy_done = true;
+					break;
+				}
+				ch_from = mbuf_from->start;
+			}
+
+			if(crlf_counter == 0)
+			{
+				if(*ch_from == ' ' && space_flag == false)
+				{
+					space_flag = true;
+					space_counter ++;
+				}
+				else if(*ch_from != ' ' && space_flag == true)
+				{
+					space_flag = false;
+				}
+				else if(*ch_from == ' ' && space_flag == true)
+				{
+					ch_from ++;
+					continue;
+				}
+
+
+				switch(space_counter)
+				{
+				case 0:
+					ch_from ++;
+					break;
+				case 1:
+				case 2:
+					*mbuf_to->last = *ch_from;
+					ch_from ++;
+					mbuf_to->last ++;
+					msg_wb->mlen ++;
+					break;
+				case 3:
+					if(k < 3)
+					{
+						*mbuf_to->last = str_space_zero[k];
+						k ++;
+						mbuf_to->last ++;
+						msg_wb->mlen ++;
+					}
+					else
+					{
+						*mbuf_to->last = *ch_from;
+						ch_from ++;
+						mbuf_to->last ++;
+						msg_wb->mlen ++;
+					}
+					break;
+				case 4:
+					ch_from ++;
+					break;
+				default:
+					log_error("error: program can not reach here!");
+					req_put(msg_wb);
+					NOT_REACHED();
+					return NC_ERROR;
+					break;
+				}
+
+				if(*ch_from == CR)
+				{
+					crlf_counter ++;	
+					k = 0;
+					msg_print(msg_wb, LOG_DEBUG);
+					break;
+				}
+			}
+			else
+			{			
+				log_debug(LOG_DEBUG, "vlen : %d", vlen);
+				if(vlen == 0)
+				{
+					
+					vlen = msg_wb->vlen;
+					/*	memcached allows value len is zero
+					if(vlen <= 0)
+					{
+						msg_print(msg, LOG_ERR);
+						msg_print(msg_wb, LOG_ERR);
+					}
+					ASSERT(vlen > 0);
+					*/
+				}
+				msg_print(msg_wb, LOG_DEBUG);
+				log_debug(LOG_DEBUG, "vlen : %d", vlen);
+				if(!noreply_append_flag)
+				{
+					*mbuf_to->last = str_noreply[k];
+					k ++;
+					mbuf_to->last ++;
+					msg_wb->mlen ++;
+					if(k >= 8)
+					{
+						noreply_append_flag = true;
+						k = 0;
+					}
+				}
+				else if(vlen_copied < vlen + extra_len)
+				{					
+					*mbuf_to->last = *ch_from;
+					ch_from ++;
+					mbuf_to->last ++;
+					msg_wb->mlen ++;
+					vlen_copied ++;
+				}
+				else
+				{
+					break;
+				}
+				
+			}
+		}
+		msg_wb->parser(msg_wb);
+		switch (msg_wb->result) {
+		case MSG_PARSE_OK:
+			log_debug(LOG_DEBUG, "MSG_PARSE_OK and crlf_counter is %d", crlf_counter);
+			msg_print(msg_wb, LOG_DEBUG);
+			crlf_counter = 0;
+			space_counter = 0;
+			space_flag = false;
+			vlen = 0;
+			vlen_copied = 0;
+			if(pmsg->replication_mode == 0)
+			{
+				noreply_append_flag = false;
+			}
+
+			count_msg_wb ++;
+			req_forward(ctx, c_conn, msg_wb);
+			
+			if(count_msg_wb < array_n(msg->keys))
+			{			
+				msg_wb = req_get(c_conn);
+				msg_wb->owner = c_conn;
+				//msg_wb->server_pool_id = pmsg->server_pool_id;
+				msg_wb->server_pool_id = -2;
+				/* prepend set */
+    			status = msg_append(msg_wb, (uint8_t *)"set", 3);
+			    if (status != NC_OK) {
+			        nc_free(msg_wb);
+			        return status;
+			    }
+				mbuf_to = STAILQ_FIRST(&msg_wb->mhdr);
+				//msg_wb->mlen += mbuf_length(mbuf_to);
+				msg_wb->pos =  mbuf_to->pos;
+			}
+			else
+			{
+				//ASSERT(msg_copy_done);
+				msg_copy_done = true;
+			}
+		break;
+
+		case MSG_PARSE_REPAIR:
+			log_debug(LOG_DEBUG, "MSG_PARSE_REPAIR and crlf_counter is %d", crlf_counter);
+			ASSERT(crlf_counter < 2);
+			//status = msg_repair(NULL, c_conn, msg_wb);
+			/*
+			struct mbuf *nbuf;
+		    nbuf = mbuf_split(&msg->mhdr, msg->pos, NULL, NULL);
+		    if (nbuf == NULL) {
+				req_put(msg_wb);
+		        return NC_ENOMEM;
+		    }
+		    mbuf_insert(&msg->mhdr, nbuf);
+		    msg->pos = nbuf->pos;
+			*/
+			struct mbuf *nbuf;
+		    nbuf = mbuf_split(&msg_wb->mhdr, msg_wb->pos, NULL, NULL);
+		    if (nbuf == NULL) {
+				req_put(msg_wb);
+		        return NC_ENOMEM;
+		    }
+		    mbuf_insert(&msg_wb->mhdr, nbuf);
+		    msg_wb->pos = nbuf->pos;
+		break;
+
+		case MSG_PARSE_AGAIN:
+			log_debug(LOG_DEBUG, "MSG_PARSE_AGAIN and crlf_counter is %d", crlf_counter);
+			ASSERT(crlf_counter <= 2);
+		break;
+
+		default:
+			req_put(msg_wb);
+			log_error("error: parse the replication msg error!");
+			return NC_ERROR;
+		break;
+		}
+	}
+	while(!msg_copy_done);
+
+	ASSERT(count_msg_wb == array_n(msg->keys));
+	
+	return NC_OK;
+}
+
+
+#endif //shenzheng 2015-2-27 replication pool

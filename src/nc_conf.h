@@ -58,6 +58,12 @@
 #define CONF_DEFAULT_SERVER_CONNECTIONS      1
 #define CONF_DEFAULT_KETAMA_PORT             11211
 
+#if 1 //shenzheng 2015-1-7 replication pool
+#define CONF_DEFAULT_REPLICATION_MODE      	 0
+#define CONF_DEFAULT_WRITE_BACK_MODE		 0
+#define CONF_DEFAULT_PENETRATE_MODE			 0
+#endif //shenzheng 2015-1-26 replication pool
+
 #if 1 //shenzheng 2015-1-8 log rotating
 #define CONF_DEFAULT_LOG_RORATE			 	 1
 #define CONF_DEFAULT_LOG_FILE_MAX_SIZE		 1073741824
@@ -118,7 +124,32 @@ struct conf_pool {
     int                server_failure_limit;  /* server_failure_limit: */
     struct array       server;                /* servers: conf_server[] */
     unsigned           valid:1;               /* valid? */
-	
+#if 1 //shenzheng 2014-12-20 replication pool
+	struct string	   replication_from;	  /* the otherconf_pool that this conf_pool replicate from */
+	/* [replication_mode] 
+	  * 0:asynchronous write(default);
+	  * 1:semi-synchronous write(just sent the master response to client, 
+	  *    and get the slave write response, if not success, notes in a file, 
+	  *	 not response slave to client);
+	  * 2:synchronous write.
+	  */
+	int		   		   replication_mode;
+	/* [write_back_mode] 
+	  * 0:if master pool miss but slave pool hit, do not write back to master slave(default);
+	  * 1:if master pool miss but slave pool hit, write back to master slave,
+	  *    and if error occur, record in log file.
+	  */
+	int		   		   write_back_mode;
+	/* [penetrate_mode] 
+	  * just for get/gets command
+	  * 0:only when master pool return no-error and get key miss, request will penetrate to slave pool(default);
+	  * 1:only when master pool return error, request will penetrate to slave pool;
+	  * 2:master pool return no-error or get key miss, request will penetrate to slave pool;
+	  * 3:do not penetrate anyway.
+	  */
+	int		   		   penetrate_mode;
+#endif //shenzheng 2015-1-26 replication pool
+
 #if 1 //shenzheng 2015-6-5 tcpkeepalive
 	int				   tcpkeepalive;		  /* tcpkeepalive: */
 	int				   tcpkeepidle;			  /* tcpkeepidle: */
@@ -171,6 +202,12 @@ void conf_destroy(struct conf *cf);
 #if 1 //shenzheng 2015-6-26 replace server
 rstatus_t conf_write_back_yaml(struct context *ctx, struct string *old_ser, struct string *new_ser);
 #endif //shenzheng 2015-6-26 replace server
+
+#if 1 //shenzheng 2015-1-7 replication pool
+char *conf_set_replication_mode(struct conf *cf, struct command *cmd, void *conf);
+char *conf_set_write_back_mode(struct conf *cf, struct command *cmd, void *conf);
+char *conf_set_penetrate_mode(struct conf *cf, struct command *cmd, void *conf);
+#endif //shenzheng 2015-4-2 replication pool
 
 #if 1 //shenzheng 2015-1-8 log rotating
 char *conf_set_log_rorate(struct conf *cf, struct command *cmd, void *conf);

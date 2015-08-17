@@ -2671,3 +2671,104 @@ redis_add_auth_packet(struct context *ctx, struct conn *c_conn, struct conn *s_c
 
     return NC_OK;
 }
+
+#if 1 //shenzheng 2015-1-15 replication pool
+rstatus_t
+redis_handle_result(struct context *ctx, struct conn *conn, struct msg *r)
+{
+	//struct conn *conn;
+	//struct server_pool *sp;
+	//conn = r->owner;
+	//ASSERT(conn->client && !conn->proxy);
+	//sp = conn->owner;
+	if(r->server_pool_id == -2)
+	{
+		return NC_OK;
+	}
+	ASSERT(r->server_pool_id == -1);
+	if(r->replication_mode == 0 || r->replication_mode == 1 
+		|| conn->nreplication_request == 0)
+	{
+		return NC_OK;
+	}
+	struct msg *msg_m, *pmsg_m;	/* master msg, peer msg */
+	struct msg *msg_s, *pmsg_s;	/* slave msg, peer msg */
+	struct msg *msg_tmp;
+	struct msg **msg_addr_tmp;
+	msg_m = r;
+	pmsg_m = msg_m->peer;
+	
+	ASSERT(msg_m->request);
+	ASSERT(msg_m->server_pool_id == -1);
+	ASSERT(msg_m->frag_id == 0);
+	ASSERT(msg_m->nreplication_msgs > 0);
+	ASSERT(msg_m->replication_msgs != NULL);
+	msg_s = msg_m->replication_msgs[0];
+	ASSERT(msg_m != NULL);
+	pmsg_s = msg_s->peer;
+	ASSERT(msg_m->type == msg_s->type);
+
+	
+	if(msg_s->error && !msg_m->error)
+	{
+		goto handle;
+	}
+	else if(!msg_s->error && !msg_m->error)
+	{
+		ASSERT(pmsg_s != NULL);
+		if(pmsg_m->type != pmsg_s->type)
+		{
+			switch(msg_m->type)
+			{
+				default:
+					break;	
+			}
+		}
+		else
+		{
+			
+		}	
+	}
+	return NC_OK;
+handle:
+	//msg_tmp = msg_m->peer;
+	//msg_m->peer = msg_s->peer;
+	//msg_s->peer = msg_tmp;
+	log_debug(LOG_DEBUG, "move slave msg to master.");
+	msg_tmp = TAILQ_PREV(msg_m, msg_tqh, c_tqe);
+	TAILQ_REMOVE(&conn->omsg_q, msg_m, c_tqe);
+	//TAILQ_REMOVE(slave_msg_q, msg_elem_s, c_tqe);
+	//req_put(msg_elem_m);
+	if(msg_tmp == NULL)
+	{
+		TAILQ_INSERT_HEAD(&conn->omsg_q, msg_s, c_tqe);
+	}
+	else
+	{
+		TAILQ_INSERT_AFTER(&conn->omsg_q, msg_tmp, msg_s, c_tqe);
+	}
+	ASSERT(msg_m->master_msg == NULL);
+	ASSERT(msg_s->nreplication_msgs == -1);
+	ASSERT(msg_s->replication_msgs == NULL);
+	msg_s->replication_msgs = msg_m->replication_msgs;
+	msg_m->replication_msgs = NULL;
+	msg_s->replication_msgs[0] = msg_m;
+	msg_m->master_msg = msg_s;
+	msg_s->master_msg = NULL;
+	msg_s->server_pool_id = -1;
+	msg_m->server_pool_id = 0;
+	return NC_OK;
+}
+
+rstatus_t
+redis_replication_penetrate(struct msg *pmsg, 
+					struct msg *msg, struct msg_tqh *frag_msgq)
+{
+	return NC_OK;
+}
+
+rstatus_t redis_replication_write_back(struct context *ctx, struct msg *pmsg, struct msg *msg)
+{
+	return NC_OK;
+}
+#endif //shenzheng 2015-1-15 replication pool

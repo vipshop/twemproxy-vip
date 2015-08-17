@@ -86,6 +86,10 @@ struct conn {
     unsigned           redis:1;       /* redis? */
     unsigned           need_auth:1;   /* need_auth? */
 
+#if 1 //shenzheng 2014-12-24 replication pool
+	int		   		   nreplication_request;   /* this connect sent requests repeatedly,must >= 0.(for client connetction) */
+#endif //shenzheng 2014-12-26 replication pool
+
 #if 1 //shenzheng 2015-7-14 config-reload
 	unsigned           reload_conf:1;   /* for reload_conf? */
 #endif //shenzheng 2015-7-14 config-reload

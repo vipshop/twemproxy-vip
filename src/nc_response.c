@@ -197,6 +197,16 @@ rsp_filter(struct context *ctx, struct conn *conn, struct msg *msg)
         return true;
     }
 
+#if 1 //shenzheng 2015-3-2 common
+	log_debug(LOG_DEBUG, "pmsg->server_pool_id : %d", pmsg->server_pool_id);
+	if(pmsg->peer != NULL)
+	{
+		msg_print(pmsg, LOG_DEBUG);
+		msg_print(pmsg->peer, LOG_DEBUG);
+		msg_print(pmsg->peer->peer, LOG_DEBUG);
+	}
+#endif //shenzheng 2015-3-2 common
+
     ASSERT(pmsg->peer == NULL);
     ASSERT(pmsg->request && !pmsg->done);
 
@@ -212,6 +222,43 @@ rsp_filter(struct context *ctx, struct conn *conn, struct msg *msg)
         req_put(pmsg);
         return true;
     }
+
+#if 1 //shenzheng 2015-1-16 replication pool
+	/* msg response from slave pool for double write */
+	if(!pmsg->frag_id && pmsg->replication_mode == 1 
+		&& pmsg->master_msg && pmsg->server_pool_id >= 0)
+	{
+		struct msg *master_msg;
+		
+		master_msg = pmsg->master_msg;
+		pmsg->peer = msg;
+	    msg->peer = pmsg;
+
+	    msg->pre_coalesce(msg);
+		pmsg->self_done = 1;
+		conn->dequeue_outq(ctx, conn, pmsg);
+
+		master_msg->handle_result(ctx, conn, master_msg);
+		if(master_msg->master_send)
+		{
+			req_put(master_msg);
+		}
+		return true;
+	}
+	/* msg response from master pool for write back */
+	if(pmsg->server_pool_id == -2)
+	{
+		ASSERT(!pmsg->frag_id);
+		ASSERT(pmsg->replication_mode != 0);
+		pmsg->peer = msg;
+	    msg->peer = pmsg;
+		pmsg->self_done = 1;
+		conn->dequeue_outq(ctx, conn, pmsg);
+		pmsg->handle_result(ctx, conn, pmsg);
+		req_put(pmsg);
+		return true;
+	}
+#endif //shenzheng 2015-1-19 replication pool
 
     return false;
 }
@@ -243,12 +290,101 @@ rsp_forward(struct context *ctx, struct conn *s_conn, struct msg *msg)
     ASSERT(pmsg->request && !pmsg->done);
 
     s_conn->dequeue_outq(ctx, s_conn, pmsg);
-	
+
+#if 1 //shenzheng 2015-1-6 replication pool
+
+	log_debug(LOG_DEBUG, "pmsg : [ id(%d) result(%d) state(%d) error(%d) ferror(%d) type(%d) vlen(%d) ]", 
+		pmsg->id, pmsg->result, pmsg->state, pmsg->error, pmsg->ferror, pmsg->type, pmsg->vlen);
+	log_debug(LOG_DEBUG, "pmsg_elem : [ id(%d) result(%d) state(%d) error(%d) ferror(%d) type(%d) vlen(%d) ]", 
+		msg->id, msg->result, msg->state, msg->error, msg->ferror, msg->type, msg->vlen);
+	c_conn = pmsg->owner;
+   	ASSERT(c_conn->client && !c_conn->proxy);
+	struct server_pool *sp = c_conn->owner;
+	ASSERT(sp != NULL);
+
+	/* establish msg <-> pmsg (response <-> request) link */
+	pmsg->peer = msg;
+	msg->peer = pmsg;
+
+	msg->pre_coalesce(msg);
+	if(pmsg->frag_id)
+	{
+		ASSERT(array_n(pmsg->keys) > 0);
+		log_debug(LOG_DEBUG, "array_n(pmsg->keys):%d ; array_n(msg->keys):%d", array_n(pmsg->keys), array_n(msg->keys));
+		ASSERT(array_n(pmsg->keys) >= array_n(msg->keys));
+		if(req_need_penetrate(pmsg, msg))
+		{
+			req_penetrate(ctx, s_conn, pmsg, msg);
+			return;
+		}
+		else
+		{
+			pmsg->self_done = 1;
+			pmsg->done = 1;
+			
+			if(pmsg->server_pool_id >= 0 && sp->write_back_mode == 1 && array_n(msg->keys) > 0)
+			{
+				status = msg->replication_write_back(ctx, pmsg, msg);
+				stats_server_incr(ctx, s_conn->owner, write_back);
+				if (status != NC_OK) {
+			        log_error("error: replication_write_back error occur!");
+					stats_server_incr(ctx, s_conn->owner, write_back_err);
+			    }
+			}
+		}
+	}
+	else
+	{
+		if(pmsg->replication_mode == 0 || pmsg->replication_mode == 1)
+		{
+			ASSERT(pmsg->server_pool_id == -1);
+			if(pmsg->server_pool_id != -1)
+			{
+				log_error("error: %s replication_mode is %d(pmsg->replication_mode : %d), but msg(%d)->server_pool_id is %d(-1 is correct!).", 
+					sp->name.data, sp->replication_mode, pmsg->replication_mode, pmsg->id, pmsg->server_pool_id);
+			}
+		}
+		if(pmsg->server_pool_id == -1)
+		{
+			pmsg->self_done = 1;
+
+    		if(msg_pass(pmsg))
+			{
+				pmsg->done = 1;
+				pmsg->handle_result(ctx, c_conn, pmsg);
+			}
+		}
+		else
+		{
+			ASSERT(sp->replication_mode == 2);
+#endif //shenzheng 2015-4-7 replication pool
+
+#if 1 //shenzheng 2015-1-16 replication pool
+#else  //shenzheng 2015-1-16 replication pool
     pmsg->done = 1;
 
     /* establish msg <-> pmsg (response <-> request) link */
     pmsg->peer = msg;
     msg->peer = pmsg;
+
+    msg->pre_coalesce(msg);
+#endif //shenzheng 2015-4-8 replication pool
+
+    c_conn = pmsg->owner;
+    ASSERT(c_conn->client && !c_conn->proxy);
+#if 1 //shenzheng 2015-1-6 replication pool
+			pmsg->self_done = 1;
+			struct msg *master_msg = pmsg->master_msg;
+			ASSERT(master_msg->nreplication_msgs > 0);
+			ASSERT(master_msg->replication_msgs != NULL);
+			if(msg_pass(master_msg))
+			{
+				master_msg->done = 1;
+				master_msg->handle_result(ctx, c_conn, master_msg);
+			}
+		}
+	}
+#endif //shenzheng 2015-1-6 replication pool
 
 #if 1 //shenzheng 2015-6-25 replace server
 	if(pmsg->replace_server)
@@ -387,15 +523,8 @@ rsp_forward(struct context *ctx, struct conn *s_conn, struct msg *msg)
 				conn->ref(conn, ser_curr);
 			}
 		}
-		
-		
 	}
 #endif //shenzheng 2015-6-25 replace server
-
-    msg->pre_coalesce(msg);
-
-    c_conn = pmsg->owner;
-    ASSERT(c_conn->client && !c_conn->proxy);
 
     if (req_done(c_conn, TAILQ_FIRST(&c_conn->omsg_q))) {
         status = event_add_out(ctx->evb, c_conn);
@@ -419,10 +548,6 @@ rsp_recv_done(struct context *ctx, struct conn *conn, struct msg *msg,
 
     /* enqueue next message (response), if any */
     conn->rmsg = nmsg;
-
-#if 1 //shenzheng 2015-8-10 for debug
-	msg_print(msg, LOG_DEBUG);
-#endif //shenzheng 2015-8-10 for debug
 
     if (rsp_filter(ctx, conn, msg)) {
         return;
@@ -509,7 +634,6 @@ rsp_send_done(struct context *ctx, struct conn *conn, struct msg *msg)
     /* dequeue request from client outq */
     conn->dequeue_outq(ctx, conn, pmsg);
   	req_put(pmsg);
-
 }
 
 #if 1 //shenzheng 2015-4-28 proxy administer

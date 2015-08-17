@@ -40,6 +40,12 @@ typedef rstatus_t (*msg_fragment_t)(struct msg *, uint32_t, struct msg_tqh *);
 typedef void (*msg_coalesce_t)(struct msg *r);
 typedef rstatus_t (*msg_reply_t)(struct msg *r);
 
+#if 1 //shenzheng 2015-1-15 replication pool
+typedef rstatus_t (*msg_handle_result_t)(struct context *ctx,struct conn *conn, struct msg *r);
+typedef rstatus_t (*msg_replication_penetrate_t)(struct msg *pmsg, struct msg *msg, struct msg_tqh *frag_msgq);
+typedef rstatus_t (*msg_replication_write_back_t)(struct context *ctx, struct msg *pmsg, struct msg *msg);
+#endif //shenzheng 2015-1-22 replication pool
+
 typedef enum msg_parse_result {
     MSG_PARSE_OK,                         /* parsing ok */
     MSG_PARSE_ERROR,                      /* parsing error */
@@ -209,6 +215,19 @@ struct keypos {
     uint8_t             *end;             /* key end pos */
 };
 
+#if 1 //shenzheng 2015-3-26 replication pool
+/* keypos with mbuf, this is used for the 
+ *  start pos and end pos may not be in 
+ *  one mbuf
+ */
+struct keypos_wmb {
+    uint8_t             *start;           /* key start pos */
+    uint8_t             *end;             /* key end pos */
+	struct mbuf			*start_mbuf;	  /* key start pos in this mbuf */
+	struct mbuf			*end_mbuf;		  /* key end pos in this mbuf */
+};
+#endif //shenzheng 2015-3-26 replication pool
+
 struct msg {
     TAILQ_ENTRY(msg)     c_tqe;           /* link in client q */
     TAILQ_ENTRY(msg)     s_tqe;           /* link in server q */
@@ -233,6 +252,9 @@ struct msg {
     int                  state;           /* current parser state */
     uint8_t              *pos;            /* parser position marker */
     uint8_t              *token;          /* token marker */
+#if 1 //shenzheng 2015-4-3 replication pool
+	uint8_t              *res_key_token;  /* token marker for respose key token */
+#endif //shenzheng 2015-4-3 replication pool
 
     msg_parse_t          parser;          /* message parser */
     msg_parse_result_t   result;          /* message parsing result */
@@ -282,6 +304,41 @@ struct msg {
 	uint32_t			 mser_idx;		  /* replace server index of pool->server */
 	struct server        *server;		  /* new server in the replace server command */
 #endif //shenzheng 2015-7-27 replace server
+
+#if 1 //shenzheng 2015-1-7 replication pool
+	/* [replication_mode] 
+	  * 0:asynchronous write(default), 
+	  * 1:semi-synchronous write(just sent the master response to client, 
+	  *    and get the slave write response, if not success, notes in a file, 
+	  *	 not response slave to client),
+	  * 2: synchronous write.
+	  */
+	int		           replication_mode;   /* equal the conf_pool->replication_mode(for master server pool) */
+	 /* [server_pool_id](for request msg)
+	    * -2:msg is for write back;
+	    * -1:msg transmit using master pool; 
+	    * N(N>=0):msg transmit using the 
+	    * N replication pool that in the master 
+	    * server pool->replication_pools. 
+	   */
+	int			 		 server_pool_id; 
+	int					 nreplication_msgs;		/* the num of the replication msgs.(for request write msg. if master, >=0; if slave, -1) */
+	struct msg			 **replication_msgs;	/* the replication msgs.(for master request write msg), this value of slave is -1. */
+	struct msg			 *master_msg;			/* the master msg for the replication msgs.(for slave request write msg) */
+	/* [self_done](for request write msg)
+	  * 0:this msg is done
+	  * 1:only this msg is done
+	  */
+	unsigned             self_done:1;
+	/* [master_send](for request write msg)
+	  * 0:this msg has not send to user.
+	  * 1:this msg has send to user.
+	  */
+	unsigned             master_send:1;
+	msg_handle_result_t	 handle_result;			/* if necessary, combine the master and slaves results.(for master request write msg) */
+	msg_replication_penetrate_t	replication_penetrate;	/* if query miss in the master pool,  the msg penetrate the replication pool */
+	msg_replication_write_back_t replication_write_back;	/* if the result from slave pool is not null, write back to master pool. */
+#endif //shenzheng 2015-1-21 replication pool
 
 };
 
@@ -334,6 +391,21 @@ struct msg *rsp_recv_next(struct context *ctx, struct conn *conn, bool alloc);
 void rsp_recv_done(struct context *ctx, struct conn *conn, struct msg *msg, struct msg *nmsg);
 struct msg *rsp_send_next(struct context *ctx, struct conn *conn);
 void rsp_send_done(struct context *ctx, struct conn *conn, struct msg *msg);
+
+#if 1 //shenzheng 2014-12-26 replication pool
+struct msg * msg_copy_for_replication(struct conn * c_conn, struct msg * msg_f, int sp_id);
+#endif //shenzheng 2014-12-26 replication pool
+
+#if 1 //shenzheng 2015-1-7 replication pool
+void req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg);
+bool replication_msgs_done(struct msg *msg);
+bool msg_pass(struct msg *msg);
+#endif //shenzheng 2015-1-7 replication pool
+
+#if 1 //shenzheng 2015-4-2 replication pool
+bool req_need_penetrate(struct msg *pmsg, struct msg *msg);
+void req_penetrate(struct context *ctx, struct conn *s_conn, struct msg *pmsg, struct msg *msg);
+#endif //shenzheng 2015-4-8 replication pool
 
 #if 1 //shenzheng 2015-2-3 common
 void _msg_print(const char *file, int line, struct msg *msg, bool real, int level);

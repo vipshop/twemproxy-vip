@@ -107,7 +107,48 @@ req_put(struct msg *msg)
 
     ASSERT(msg->request);
 
+#if 1 //shenzheng 2015-1-19 replication pool
+	if(!msg->frag_id && msg->replication_mode == 1 && !msg->noreply && !msg->swallow)
+	{
+		/*
+		if(!msg->self_done || !replication_msgs_done(msg))
+		{
+			return;
+		}
+		*/
+		
+		if(msg->nreplication_msgs >= 0)
+		{
+			if(!replication_msgs_done(msg))
+			{
+				return;
+			}
+		}
+		else
+		{
+			struct msg *master_msg;
+			master_msg = msg->master_msg;
+			//if(master_msg == NULL)
+			//{
+			//	msg_print(msg, LOG_ERR);
+			//}
+			ASSERT(master_msg != NULL);
+			ASSERT(master_msg->nreplication_msgs >= 0);
+			ASSERT(master_msg->request);
+			if(!replication_msgs_done(master_msg))
+			{
+				return;
+			}
+		}
+	}
+	
+	if(!msg->master_send)
+	{
+#endif //shenzheng 2015-1-19 replication pool
 	req_log(msg);
+#if 1 //shenzheng 2015-1-19 replication pool
+	}	
+#endif //shenzheng 2015-1-19 replication pool
 
     pmsg = msg->peer;
     if (pmsg != NULL) {
@@ -116,6 +157,59 @@ req_put(struct msg *msg)
         pmsg->peer = NULL;
         rsp_put(pmsg);
     }
+	
+#if 1 //shenzheng 2015-1-15 replication pool
+	msg_print(msg, LOG_DEBUG);
+
+	if(msg->nreplication_msgs > 0 && msg->replication_msgs != NULL)
+	{
+		struct msg *replication_msg;
+		int i;
+		for(i = 0; i < msg->nreplication_msgs; i ++)
+		{
+			replication_msg = msg->replication_msgs[i];
+			if(replication_msg == NULL)
+			{
+				log_debug(LOG_DEBUG, "replication_msg[%d] is null", i);
+				continue;
+			}
+			else
+			{
+				msg->replication_msgs[i] = NULL;
+			}
+			
+			if(replication_msg->swallow && !replication_msg->self_done)
+			{
+				ASSERT(replication_msg->master_msg != NULL);
+				replication_msg->master_msg = NULL;
+				continue;
+			}
+			
+			ASSERT(replication_msg != NULL);
+
+			log_debug(LOG_DEBUG, " replication_msg->master_msg->id: %d", replication_msg->master_msg->id);
+			msg_print(replication_msg, LOG_DEBUG);
+
+			ASSERT(replication_msg->master_msg != NULL);
+			
+			ASSERT(replication_msg->request);
+			ASSERT(replication_msg->server_pool_id >= 0);
+			ASSERT(replication_msg->master_msg->server_pool_id == -1);
+			pmsg = replication_msg->peer;
+    		if (pmsg != NULL) {
+       		 	ASSERT(!pmsg->request && pmsg->peer == replication_msg);
+       		 	replication_msg->peer = NULL;
+        		pmsg->peer = NULL;
+        		rsp_put(pmsg);
+    		}
+
+			msg_tmo_delete(replication_msg);
+			msg_put(replication_msg);
+		}
+		nc_free(msg->replication_msgs);
+		msg->replication_msgs = NULL;
+	}
+#endif //shenzheng 2015-1-15 replication pool
 	
     msg_tmo_delete(msg);
 
@@ -363,6 +457,9 @@ req_client_dequeue_omsgq(struct context *ctx, struct conn *conn, struct msg *msg
     ASSERT(conn->client && !conn->proxy);
 
     TAILQ_REMOVE(&conn->omsg_q, msg, c_tqe);
+#if 1 //shenzheng 2015-4-15 replication pool
+	msg->master_send = 1;
+#endif //shenzheng 2015-4-15 replication pool
 }
 
 void
@@ -709,9 +806,36 @@ req_forward_error(struct context *ctx, struct conn *conn, struct msg *msg)
               "c %d failed: %s", msg->id, msg->mlen, msg->type, conn->sd,
               strerror(errno));
 
+#if 1 //shenzheng 2015-3-3  replication pool
+#else //shenzheng 2015-3-3  replication pool
     msg->done = 1;
+#endif //shenzheng 2015-3-3  replication pool
+#if 1 //shenzheng 2015-3-3  replication pool
+	msg->self_done = 1;
+#endif //shenzheng 2015-3-3  replication pool
     msg->error = 1;
     msg->err = errno;
+
+#if 1 //shenzheng 2015-3-3  replication pool
+	if(msg->frag_id)
+	{
+		if(req_need_penetrate(msg, msg->peer))
+		{
+			req_penetrate(ctx, conn, msg, msg->peer);
+		}
+		else
+		{
+			msg->done = 1;
+		}
+	}
+	else if(msg->server_pool_id == -2)
+	{
+		//ASSERT(msg->replication_mode != 0);
+		msg->handle_result(ctx, conn, msg);
+		req_put(msg);
+		return;
+	}
+#endif //shenzheng 2015-3-3  replication pool
 
     /* noreply request don't expect any response */
     if (msg->noreply) {
@@ -736,7 +860,11 @@ req_forward_stats(struct context *ctx, struct server *server, struct msg *msg)
     stats_server_incr_by(ctx, server, request_bytes, msg->mlen);
 }
 
+#if 1 //shenzheng 2015-1-7 replication pool
+void
+#else
 static void
+#endif //shenzheng 2015-1-7 replication pool
 req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg)
 {
     rstatus_t status;
@@ -750,7 +878,15 @@ req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg)
 
     /* enqueue message (request) into client outq, if response is expected */
     if (!msg->noreply) {
+#if 1 //shenzheng 2014-12-17 replication pool
+		//if(msg->server_pool_id == -1 || !msg->frag_id)
+		if(msg->server_pool_id == -1)
+		{
+#endif //shenzheng 2014-12-26 replication pool
         c_conn->enqueue_outq(ctx, c_conn, msg);
+#if 1 //shenzheng 2014-12-17 replication pool
+		}
+#endif //shenzheng 2014-12-17 replication pool
     }
 
     pool = c_conn->owner;
@@ -759,55 +895,161 @@ req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg)
     key = kpos->start;
     keylen = (uint32_t)(kpos->end - kpos->start);
 
-#if 1 //shenzheng 2015-6-24 replace server
-	if(1 == msg->replace_server)
-	{
-		ASSERT(msg->conf_version_curr == ctx->conf_version);
+#if 1 //shenzheng 2015-1-7 replication pool
+	int i, nreplication_request;
+	nreplication_request = c_conn->nreplication_request;
+	log_debug(LOG_DEBUG, "replication_requests : %d\n", nreplication_request);
 	
-		log_debug(LOG_DEBUG, "msg->mser_idx : %d", msg->mser_idx);
-		log_debug(LOG_DEBUG, "array_n(&pool->server) : %d", array_n(&pool->server));
-		if(array_n(&pool->server) <= msg->mser_idx)
+	i = 0;
+	
+	if(msg->frag_id)
+	{
+		i = nreplication_request;
+		
+		if(msg->server_pool_id == -1)
 		{
-			s_conn = NULL; 
+			s_conn = server_pool_conn(ctx, c_conn->owner, key, keylen);
+		}
+		else if(msg->server_pool_id >= 0)
+		{
+			ASSERT(msg->server_pool_id < c_conn->nreplication_request);
+			struct server_pool **sp_slave = array_get(&pool->replication_pools, msg->server_pool_id);
+			s_conn = server_pool_conn(ctx, *sp_slave, key, keylen);
 		}
 		else
 		{
-			s_conn = server_pool_conn_for_replace(ctx, c_conn->owner, msg);
-			if(s_conn != NULL)
-			{
-				struct mbuf *mbuf;
-				char *content = NULL;
-				
-				while(!STAILQ_EMPTY(&msg->mhdr))
-				{
-					mbuf = STAILQ_FIRST(&msg->mhdr);
-					mbuf_remove(&msg->mhdr, mbuf);
-					mbuf_put(mbuf);
-				}
-				msg->mlen = 0;
-				content = "*1\r\n$4\r\nping\r\n";
-				status = msg_append(msg, (uint8_t *)content, (size_t)strlen(content));
-				if(status != NC_OK)
-				{
-					struct server *ser;
-					ser = s_conn->owner;
-					server_close(ctx, s_conn);
-					s_conn = NULL;
-					server_close_for_replace_server(ser);
-				}
-			}
+			s_conn = NULL;
+			log_debug(LOG_ERR, "error: msg(%d)->server_pool_id < -1!", msg->id);
+			
 		}
 	}
 	else
 	{
+#endif //shenzheng 2015-1-7 replication pool
+
+#if 1 //shenzheng 2015-6-24 replace server
+		if(1 == msg->replace_server)
+		{
+			ASSERT(msg->conf_version_curr == ctx->conf_version);
+			log_debug(LOG_DEBUG, "msg->mser_idx : %d", msg->mser_idx);
+			log_debug(LOG_DEBUG, "array_n(&pool->server) : %d", array_n(&pool->server));
+			if(array_n(&pool->server) <= msg->mser_idx)
+			{
+				s_conn = NULL; 
+			}
+			else
+			{
+				s_conn = server_pool_conn_for_replace(ctx, c_conn->owner, msg);
+				if(s_conn != NULL)
+				{
+					struct mbuf *mbuf;
+					char *content = NULL;
+					
+					while(!STAILQ_EMPTY(&msg->mhdr))
+					{
+						mbuf = STAILQ_FIRST(&msg->mhdr);
+						mbuf_remove(&msg->mhdr, mbuf);
+						mbuf_put(mbuf);
+					}
+					msg->mlen = 0;
+					content = "*1\r\n$4\r\nping\r\n";
+					status = msg_append(msg, (uint8_t *)content, (size_t)strlen(content));
+					if(status != NC_OK)
+					{
+						struct server *ser;
+						ser = s_conn->owner;
+						server_close(ctx, s_conn);
+						s_conn = NULL;
+						server_close_for_replace_server(ser);
+					}
+				}
+			}
+		}
+		else
+		{
 #endif //shenzheng 2015-6-24 replace server
     s_conn = server_pool_conn(ctx, c_conn->owner, key, keylen);
 #if 1 //shenzheng 2015-6-24 replace server
-	}
+		}
 #endif //shenzheng 2015-6-24 replace server
 
+#if 1 //shenzheng 2015-1-7 replication pool
+		if(msg->server_pool_id == -2)
+		{
+			i = nreplication_request;
+		}
+		else if(msg->noreply && msg->replication_mode != 0)
+		{
+			msg->replication_mode = 0;
+		}
+	}
+#endif //shenzheng 2015-3-9 replication pool
+
+#if 1 //shenzheng 2014-12-23 replication pool
+	struct msg *msg_replication, *msg_origin;
+	msg_origin = msg;
+	msg_origin->nreplication_msgs = nreplication_request - i;
+
+	//if(pool->replication_mode && msg_origin->nreplication_msgs > 0)
+	if(msg_origin->replication_mode && msg_origin->nreplication_msgs > 0)
+	{
+		msg_origin->replication_msgs = nc_zalloc(msg_origin->nreplication_msgs * sizeof(*msg_origin->replication_msgs));
+		if(msg_origin->replication_msgs == NULL)
+		{
+			log_error("error: nc_zalloc msg(%d)->replication_msgs(nreplication_msgs:%d) error!", msg_origin->id, msg_origin->nreplication_msgs);
+			msg_origin->nreplication_msgs = 0;
+			i = nreplication_request;
+		}
+		else
+		{
+			int j;
+			for(j = 0; j < msg_origin->nreplication_msgs; j ++)
+			{
+				msg_origin->replication_msgs[j] = NULL;
+			}
+		}
+	}
+replication_loop:
+	if(i < nreplication_request)
+	{
+		msg_replication = msg_copy_for_replication(c_conn, msg_origin, i);
+		
+	}
+	if(msg == NULL)
+	{
+		log_debug(LOG_DEBUG, "msg is null");
+		log_debug(LOG_DEBUG, "i: %d", i);
+		if(i < nreplication_request)
+		{
+			goto next_message;
+		}
+		return;
+	}
+#endif //shenzheng 2014-12-26 replication pool
+
     if (s_conn == NULL) {
+#if 1 //shenzheng 2015-3-2 common
+		log_debug(LOG_DEBUG, "s_conn is null");
+		log_debug(LOG_DEBUG, "i: %d", i);
+		msg_print(msg, LOG_DEBUG);
+#endif //shenzheng 2015-3-2 common
+
+#if 1 //shenzheng 2015-4-9 replication pool
+		if(msg->frag_id)
+		{
+			
+		}
+#endif //shenzheng 2015-4-9 replication pool
+
         req_forward_error(ctx, c_conn, msg);
+
+#if 1 //shenzheng 2015-3-3 replication pool
+		if(i < nreplication_request)
+		{
+			goto next_message;
+		}
+#endif //shenzheng 2015-3-3 replication pool
+
         return;
     }
     ASSERT(!s_conn->client && !s_conn->proxy);
@@ -816,8 +1058,17 @@ req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg)
     if (TAILQ_EMPTY(&s_conn->imsg_q)) {
         status = event_add_out(ctx->evb, s_conn);
         if (status != NC_OK) {
+#if 1 //shenzheng 2015-3-2 common
+			log_debug(LOG_DEBUG, "event_add_out error");
+#endif //shenzheng 2015-3-2 common
             req_forward_error(ctx, c_conn, msg);
             s_conn->err = errno;
+#if 1 //shenzheng 2015-3-3 replication pool
+			if(i < nreplication_request)
+			{
+				goto next_message;
+			}
+#endif //shenzheng 2015-3-3 replication pool
             return;
         }
     }
@@ -825,8 +1076,17 @@ req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg)
     if (s_conn->need_auth) {
         status = msg->add_auth(ctx, c_conn, s_conn);
         if (status != NC_OK) {
+#if 1 //shenzheng 2015-3-2 common
+			log_debug(LOG_DEBUG, "add_auth error");
+#endif //shenzheng 2015-3-2 common
             req_forward_error(ctx, c_conn, msg);
             s_conn->err = errno;
+#if 1 //shenzheng 2015-3-3 replication pool
+			if(i < nreplication_request)
+			{
+				goto next_message;
+			}
+#endif //shenzheng 2015-3-3 replication pool
             return;
         }
     }
@@ -838,6 +1098,37 @@ req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg)
     log_debug(LOG_VERB, "forward from c %d to s %d req %"PRIu64" len %"PRIu32
               " type %d with key '%.*s'", c_conn->sd, s_conn->sd, msg->id,
               msg->mlen, msg->type, keylen, key);
+
+#if 1 //shenzheng 2014-12-23 replication pool
+next_message:
+	if(i < nreplication_request)
+	{
+		
+		msg = msg_replication;
+		if(msg != NULL)
+		{
+			struct server_pool **sp_slave = array_get(&pool->replication_pools, i);
+
+			s_conn = server_pool_conn(ctx, *sp_slave, key, keylen);
+			//if (!msg->noreply || pool->replication_mode == 1)
+			if(!msg->noreply)
+			{
+	    		ASSERT(msg->request);
+				ASSERT(c_conn->client && !c_conn->proxy);
+
+				msg_origin->replication_msgs[i] = msg;
+				msg->master_msg = msg_origin;
+			}
+			ASSERT(array_n(msg->keys) > 0);
+			kpos = array_get(msg->keys, 0);
+			key = kpos->start;
+			keylen = (uint32_t)(kpos->end - kpos->start);
+		}
+		
+		i++;
+		goto replication_loop;
+	}
+#endif //shenzheng 2015-3-3 replication pool
 }
 
 void
@@ -858,6 +1149,10 @@ req_recv_done(struct context *ctx, struct conn *conn, struct msg *msg,
 
     /* enqueue next message (request), if any */
     conn->rmsg = nmsg;
+
+#if 0 //shenzheng 2015-3-24 common
+	msg_print(msg, LOG_ALERT);
+#endif //shenzheng 2015-3-24 common
 
     if (req_filter(ctx, conn, msg)) {
         return;
@@ -997,6 +1292,206 @@ req_send_done(struct context *ctx, struct conn *conn, struct msg *msg)
         req_put(msg);
     }
 }
+
+#if 1 //shenzheng 2015-4-2 replication pool
+bool req_need_penetrate(struct msg *pmsg, struct msg *msg)
+{
+	struct conn *c_conn;
+	struct server_pool *sp;
+
+	ASSERT(pmsg != NULL);
+    ASSERT(pmsg->request && !pmsg->done);
+
+	c_conn = pmsg->owner;
+	ASSERT(c_conn->client && !c_conn->proxy);
+	
+	sp = c_conn->owner;
+	ASSERT(sp != NULL);
+	log_debug(LOG_DEBUG, "sp->penetrate_mode: %d", sp->penetrate_mode);
+
+	if(pmsg->frag_id == 0)
+	{
+		return false;
+	}
+
+	if(pmsg->server_pool_id >= c_conn->nreplication_request - 1)
+	{
+		return false;
+	}
+
+	if(msg == NULL)
+	{
+		ASSERT(pmsg->error == 1);
+	}
+	else
+	{
+		ASSERT(!msg->request);
+	}
+
+	if(sp->penetrate_mode == 0)
+	{
+		if(!pmsg->error && array_n(msg->keys) < array_n(pmsg->keys))
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+	else if(sp->penetrate_mode == 1)
+	{
+		if(pmsg->error)
+		{
+			if(msg != NULL)
+			{
+				ASSERT(array_n(msg->keys) == 0);
+			}
+			ASSERT(array_n(pmsg->keys) > 0);
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+	else if(sp->penetrate_mode == 2)
+	{
+		if(pmsg->error || array_n(msg->keys) < array_n(pmsg->keys))
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+	else if(sp->penetrate_mode == 3)
+	{
+		return false;
+	}
+	else
+	{
+		log_error("error: server_pool[%s]'s penetrate_mode is %d!(penetrate_mode only can be 0, 1, 2 or 3.)", 
+			sp->name.data, sp->penetrate_mode);
+		return false;
+	}
+	
+	return false;
+}
+
+void
+req_penetrate(struct context *ctx, struct conn *s_conn, struct msg *pmsg, struct msg *msg)
+{
+	rstatus_t status;
+	struct server_pool *sp;
+	struct conn *c_conn;
+
+	ASSERT(pmsg != NULL && pmsg->request);
+	ASSERT(pmsg->frag_id);
+
+	c_conn = pmsg->owner;
+	ASSERT(c_conn->client && !c_conn->proxy);
+
+	sp = c_conn->owner;
+	ASSERT(sp != NULL);
+
+	stats_server_incr(ctx, s_conn->owner, penetrate);
+
+	if(pmsg->error)
+	{
+		pmsg->error = 0;
+		pmsg->err = 0;
+	}
+	else
+	{
+		ASSERT(msg != NULL);
+		//rsp_forward_stats(ctx, s_conn->owner, msg);
+		stats_server_incr(ctx, s_conn->owner, responses);
+    	stats_server_incr_by(ctx, s_conn->owner, response_bytes, msg->mlen);
+	}
+	
+	if(array_n(pmsg->keys) == 1)
+	{
+		//rsp_forward_stats(ctx, s_conn->owner, msg);
+
+		pmsg->peer = NULL;
+		if(msg != NULL)
+		{
+			msg->peer = NULL;
+			rsp_put(msg);
+		}
+		struct mbuf *mbuf_elem;
+		STAILQ_FOREACH(mbuf_elem, &pmsg->mhdr, next) {
+			mbuf_elem->pos = mbuf_elem->start;
+		}
+		pmsg->server_pool_id ++;
+		msg_tmo_delete(pmsg);
+		req_forward(ctx, c_conn, pmsg);
+		return;
+	}
+
+
+	struct msg_tqh frag_msgq;
+	struct msg *sub_msg;
+	struct msg *tmsg; 			/* tmp next message */
+
+	TAILQ_INIT(&frag_msgq);
+	
+	//ASSERT(msg != NULL);
+	pmsg->server_pool_id ++;
+
+	status = pmsg->replication_penetrate(pmsg, msg, &frag_msgq);
+
+	pmsg->self_done = 1;
+	pmsg->done = 1;
+	
+	if(status == NC_OK && !TAILQ_EMPTY(&frag_msgq))
+	{
+		log_debug(LOG_DEBUG, "replication_penetrate ok!");
+		for (sub_msg = TAILQ_FIRST(&frag_msgq); sub_msg != NULL; sub_msg = tmsg) {
+        	tmsg = TAILQ_NEXT(sub_msg, m_tqe);
+
+	        TAILQ_REMOVE(&frag_msgq, sub_msg, m_tqe);
+	        req_forward(ctx, c_conn, sub_msg);
+	    }
+		ASSERT(TAILQ_EMPTY(&frag_msgq));
+		log_debug(LOG_DEBUG, "all sub_msg had been send.");
+		if(pmsg->narg == 0)
+		{
+			if(msg != NULL && array_n(msg->keys) != 0)
+			{
+				log_debug(LOG_WARN, "array_n(msg->keys) : %d", array_n(msg->keys));
+				msg_print(pmsg, LOG_WARN);
+				msg_print(msg, LOG_WARN);
+				msg_print(pmsg->frag_owner, LOG_WARN);
+			}
+			ASSERT(msg == NULL || array_n(msg->keys) == 0);
+			pmsg->frag_owner->nfrag --;
+			TAILQ_REMOVE(&c_conn->omsg_q, pmsg, c_tqe);
+			req_put(pmsg);
+		}
+	}
+	else
+	{
+		log_error("error: replication_penetrate error occur!");
+		
+		struct msg *frag_owner;
+		frag_owner = pmsg->frag_owner;
+		ASSERT(frag_owner != NULL);
+		int i;
+		for (i = 0; i < array_n(frag_owner->keys); i++) {      /* for each  key */
+			sub_msg = frag_owner->frag_seq[i];    
+			if(sub_msg == NULL)
+			{
+				frag_owner->frag_seq[i] = pmsg;
+			}
+		}
+		stats_server_incr(ctx, s_conn->owner, penetrate_err);
+	}
+
+}
+#endif //shenzheng 2015-4-2 replication pool
 
 #if 1 //shenzheng 2015-4-28 proxy administer
 void

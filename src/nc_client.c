@@ -42,6 +42,10 @@ client_ref(struct conn *conn, void *owner)
     /* owner of the client connection is the server pool */
     conn->owner = owner;
 
+#if 1 //shenzheng 2014-12-24 replication pool
+	conn->nreplication_request = array_n(&pool->replication_pools);
+#endif //shenzheng 2014-12-24 replication pool
+
     log_debug(LOG_VVERB, "ref conn %p owner %p into pool '%.*s'", conn, pool,
               pool->name.len, pool->name.data);
 }
@@ -167,8 +171,55 @@ client_close(struct context *ctx, struct conn *conn)
         } else {
             msg->swallow = 1;
 
+#if 1 //shenzheng 2015-3-2 replication pool
+			if(msg->nreplication_msgs > 0 && msg->replication_msgs != NULL)
+			{
+				struct msg *replication_msg;
+				int i;
+				for(i = 0; i < msg->nreplication_msgs; i ++)
+				{
+					replication_msg = msg->replication_msgs[i];
+					ASSERT(replication_msg != NULL);
+					ASSERT(replication_msg->request);
+					ASSERT(replication_msg->server_pool_id >= 0);
+					ASSERT(replication_msg->master_msg->server_pool_id == -1);
+					replication_msg->swallow = 1;
+					replication_msg->master_msg = NULL;
+					msg->replication_msgs[i] = NULL;
+					if(replication_msg->self_done)
+					{
+						req_put(replication_msg);
+						continue;
+					}
+				}
+				
+			}
+#endif //shenzheng 2015-3-6 replication pool
+
             ASSERT(msg->request);
+
+#if 1 //shenzheng 2015-3-2 replication pool
+			log_debug(LOG_DEBUG, "msg->server_pool_id : %d", msg->server_pool_id);
+
+			if(!msg->self_done)
+			{
+				if(msg->peer != NULL)
+				{
+					msg_print(msg, LOG_DEBUG);
+					msg_print(msg->peer, LOG_DEBUG);
+					msg_print(msg->peer->peer, LOG_DEBUG);
+				}		
+			
+#endif //shenzheng 2015-3-5 replication pool
+
             ASSERT(msg->peer == NULL);
+#if 1 //shenzheng 2015-3-5 replication pool
+        	}			
+			else
+			{
+				req_put(msg);
+			}
+#endif //shenzheng 2015-3-5 replication pool
 
             log_debug(LOG_INFO, "close c %d schedule swallow of req %"PRIu64" "
                       "len %"PRIu32" type %d", conn->sd, msg->id, msg->mlen,

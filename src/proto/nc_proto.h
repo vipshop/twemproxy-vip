@@ -154,6 +154,16 @@ rstatus_t redis_add_auth_packet(struct context *ctx, struct conn *c_conn, struct
 rstatus_t redis_fragment(struct msg *r, uint32_t ncontinuum, struct msg_tqh *frag_msgq);
 rstatus_t redis_reply(struct msg *r);
 
+#if 1 //shenzheng 2015-1-15 replication pool
+rstatus_t memcache_handle_result(struct context *ctx, struct conn *conn, struct msg *r);
+rstatus_t memcache_replication_penetrate(struct msg *pmsg, struct msg *msg, struct msg_tqh *frag_msgq);
+rstatus_t memcache_replication_write_back(struct context *ctx, struct msg *pmsg, struct msg *msg);
+
+rstatus_t redis_handle_result(struct context *ctx, struct conn *conn, struct msg *r);
+rstatus_t redis_replication_penetrate(struct msg *pmsg, struct msg *msg, struct msg_tqh *frag_msgq);
+rstatus_t redis_replication_write_back(struct context *ctx, struct msg *pmsg, struct msg *msg);
+#endif //shenzheng 2015-1-21 replication pool
+
 #if 1 //shenzheng 2015-4-28 proxy administer
 void proxy_adm_parse_req(struct msg *r);
 void proxy_adm_parse_rsp(struct msg *r);

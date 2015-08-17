@@ -1344,7 +1344,7 @@ proxy_adm_parse_req(struct msg *r)
                 /* get next state */
                 if (proxy_adm_arg1(r)) {
                     state = SW_CRLF;
-                }else if (proxy_adm_arg2(r)) {
+                } else if (proxy_adm_arg2(r)) {
                 	ASSERT(array_n(r->keys) > 0);
                 	if(array_n(r->keys) == 1)
                 	{
@@ -1419,6 +1419,7 @@ proxy_adm_parse_req(struct msg *r)
                 }else {
                     goto error;
                 }
+
 				if(ch == CR)
 				{
 					p = p - 1;
@@ -1761,14 +1762,50 @@ proxy_adm_parse_rsp(struct msg *r)
             if (ch != ' ') {
                 state = SW_KEY;
                 p = p - 1; /* go back by 1 byte */
+#if 1 //shenzheng 2015-1-20 replication pool
+				//token = NULL;
+				r->res_key_token = NULL;
+#endif //shenzheng 2015-4-3 replication pool
             }
 
             break;
 
         case SW_KEY:
+#if 1 //shenzheng 2015-1-20 replication pool
+			/*if(token == NULL)
+			{
+				token = p;
+			}
+			*/
+			if(r->res_key_token == NULL)
+			{
+				r->res_key_token = p;
+			}
+#endif //shenzheng 2015-4-3 replication pool
             if (ch == ' ') {
                 /* r->token = NULL; */
                 state = SW_SPACES_BEFORE_FLAGS;
+#if 1 //shenzheng 2015-1-20 replication pool
+				struct keypos *kpos;
+
+				kpos = array_push(r->keys);
+				if (kpos == NULL) {
+					goto error;
+				}
+				//ASSERT(token != NULL);
+				//ASSERT(token >= b->pos && token < b->last);
+				//kpos->start = token;
+
+				ASSERT(r->res_key_token != NULL);
+				ASSERT(r->res_key_token >= b->pos && r->res_key_token < b->last);
+				kpos->start = r->res_key_token;
+				
+				kpos->end = p;
+
+				ASSERT(kpos->start >= b->pos && kpos->start < b->last);
+				ASSERT(kpos->end >= b->pos && kpos->end < b->last);
+				//kpos->end_mbuf = b;
+#endif //shenzheng 2015-4-3 replication pool
             }
 
             break;
@@ -1835,6 +1872,10 @@ proxy_adm_parse_rsp(struct msg *r)
                 /* val_start <- p + 1 */
                 state = SW_VAL;
                 r->token = NULL;
+#if 1 //shenzheng 2015-3-31 replication pool
+				//token = NULL;
+				r->res_key_token = NULL;
+#endif //shenzheng 2015-4-3 replication pool
                 break;
 
             default:
@@ -1964,6 +2005,20 @@ proxy_adm_parse_rsp(struct msg *r)
     if (b->last == b->end && r->token != NULL) {
         if (state <= SW_RUNTO_VAL || state == SW_CRLF || state == SW_ALMOST_DONE) {
             r->state = SW_START;
+
+#if 1 //shenzheng 2015-2-4 replication pool
+			//if (token != NULL)
+			if(r->res_key_token != NULL)
+			{
+				ASSERT(array_n(r->keys) > 0);
+				struct keypos *kpos;
+				kpos = array_pop(r->keys);
+				ASSERT(kpos != NULL);
+				r->res_key_token = NULL;
+				//nc_free(kpos);
+				//kpos = NULL;
+			}
+#endif //shenzheng 2015-4-3 replication pool
         }
 
         r->pos = r->token;
@@ -1986,7 +2041,11 @@ done:
     r->state = SW_START;
     r->token = NULL;
     r->result = MSG_PARSE_OK;
-	
+
+#if 1 //shenzheng 2015-4-3 replication pool
+	r->res_key_token = NULL;
+#endif //shenzheng 2015-4-3 replication pool
+
     log_hexdump(LOG_VERB, b->pos, mbuf_length(b), "parsed rsp %"PRIu64" res %d "
                 "type %d state %d rpos %d of %d", r->id, r->result, r->type,
                 r->state, r->pos - b->pos, b->last - b->pos);

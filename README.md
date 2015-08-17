@@ -35,6 +35,7 @@ Few checklists:
 
 + New command: replace_server(now just for redis).
 + Log rotate: we add three startup items:-R(--log-rotate), -M(--log-file-max-size) and -C(--log-file-count). If you want use this function, use -R to run the nutcracker. -M requires a file size between 1000000 and 1122601371959296 bytes(1PB). -C requires an integer between -1 and 200, -1 means do not delete old log files, 0 means delete all old log files, N(0<N<=200) means retain N old log files and old log files naming:logfilename_time.
++ Replication pool: we allow one server pool as another server pool's replication pool(now just for memcache and limit two pools Recursive). we add three keys for the configuration file:replication_from, replication_mode and write_back_mode. It allows double write for master pool and slave pool. If get/gets miss in master pool,  penetrate to the slave pool, and if result hit in the slave pool, write back to master pool.  
 + Tcp keepalive: add tcp keepalive for twemproxy.
 + Administration: add administration for twemproxy. Use telnet to connect administer.
 + Configuration reload: let twemproxy can reload configuration on runtime.
@@ -126,6 +127,9 @@ nutcracker can be configured through a YAML file specified by the -c or --conf-f
 + **server_retry_timeout**: The timeout value in msec to wait for before retrying on a temporarily ejected server, when auto_eject_host is set to true. Defaults to 30000 msec.
 + **server_failure_limit**: The number of consecutive failures on a server that would lead to it being temporarily ejected when auto_eject_host is set to true. Defaults to 2.
 + **servers**: A list of server address, port and weight (name:port:weight or ip:port:weight) for this server pool.
++ **replication_from**: This key is for slave pool, and requires another pool name in the same the configuration file. It means the slave pool is replication pool of the master pool.
++ **replication_mode**: This key is for master pool and storage commands(set, add, replace, append, prepend, cas). It has three possible values:0, 1 and 2. if 2, nutcracker sent the worst response of master pool and slave pool to client. if 1, nutcracker sent the master pool response to client, and if slave pool response is not equal to master pool, record in log file. if 0, nutcracker sent the master pool response to client, and do not care about the slave pool response.
++ **write_back_mode**: This key is for master pool, and has two possible values:0, 1. If we get(gets) from the master pool and result miss, then penetrate to the slave pool and hit the result, at this time, if 0, nutcracker does not write back to master pool, otherwise 1. 
 + **tcpkeepalive**: A boolean value that controls if tcp keepalive enabled. Defaults to false.
 + **tcpkeepidle**: The time value in msec that a connection is in idle, and then twemproxy check this connection whether dead or not. 
 + **tcpkeepcnt**: The number of tcpkeepalive attempt check if one idle connection dead times when the client always had no reply. 
@@ -210,6 +214,8 @@ For example, the configuration file in [conf/nutcracker.yml](conf/nutcracker.yml
       hash: fnv1a_64
       hash_tag: "{}"
       distribution: ketama
+	  replication_mode: 0
+	  write_back_mode: 0
       auto_eject_hosts: true
       timeout: 400
       redis: false
@@ -224,6 +230,7 @@ For example, the configuration file in [conf/nutcracker.yml](conf/nutcracker.yml
       hash: fnv1a_64
       hash_tag: "{}"
       distribution: ketama
+	  replication_from: master
       auto_eject_hosts: true
       timeout: 400
       redis: false
