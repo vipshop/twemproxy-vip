@@ -9,6 +9,10 @@ AM_CPPFLAGS += -I $(top_srcdir)/src/proto
 AM_CPPFLAGS += -I $(top_srcdir)/src/event
 AM_CPPFLAGS += -I $(top_srcdir)/contrib/yaml-0.1.4/include
 
+if APP_ZOOKEEPER
+AM_CPPFLAGS += -I $(ZOOKEEPER_HOME)/include/zookeeper
+endif
+
 AM_CFLAGS = 
 # about -fno-strict-aliasing: https://github.com/twitter/twemproxy/issues/276
 AM_CFLAGS += -fno-strict-aliasing
@@ -24,6 +28,10 @@ AM_LDFLAGS =
 AM_LDFLAGS += -lm -lpthread -rdynamic
 if OS_SOLARIS
 AM_LDFLAGS += -lnsl -lsocket
+endif
+
+if APP_ZOOKEEPER
+AM_LDFLAGS += -L${ZOOKEEPER_HOME}/lib -lzookeeper_mt
 endif
 
 SUBDIRS = hashkit proto event
@@ -51,6 +59,10 @@ nutcracker_SOURCES =			\
 	nc_queue.h			\
 	nc.c
 
+if APP_ZOOKEEPER
+nutcracker_SOURCES += nc_zookeeper.h nc_zookeeper.c
+endif
+	
 nutcracker_LDADD = $(top_builddir)/src/hashkit/libhashkit.a
 nutcracker_LDADD += $(top_builddir)/src/proto/libproto.a
 nutcracker_LDADD += $(top_builddir)/src/event/libevent.a

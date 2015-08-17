@@ -83,6 +83,10 @@ struct server {
 
     int64_t            next_retry;    /* next retry time in usec */
     uint32_t           failure_count; /* # consecutive failures */
+
+#if 1 //shenzheng 2014-9-5 replace server
+	unsigned		   name_null:1;	  /* name in "hostname:port:weight [name]" format string is null? */
+#endif //shenzheng 2014-9-5 replace server
 };
 
 struct server_pool {
@@ -120,6 +124,14 @@ struct server_pool {
     unsigned           auto_eject_hosts:1;   /* auto_eject_hosts? */
     unsigned           preconnect:1;         /* preconnect? */
     unsigned           redis:1;              /* redis? */
+
+#if 1 //shenzheng 2015-6-5 tcpkeepalive
+	unsigned           tcpkeepalive:1;       /* tcp keepalive? */
+	int				   tcpkeepidle;			 /* tcpkeep idle */
+	int				   tcpkeepintvl;	     /* tcpkeep interval */
+	int				   tcpkeepcnt;			 /* tcpkeep count */
+#endif //shenzheng 2015-6-5 tcpkeepalive
+
 };
 
 void server_ref(struct conn *conn, void *owner);
@@ -136,10 +148,24 @@ void server_ok(struct context *ctx, struct conn *conn);
 
 uint32_t server_pool_idx(struct server_pool *pool, uint8_t *key, uint32_t keylen);
 struct conn *server_pool_conn(struct context *ctx, struct server_pool *pool, uint8_t *key, uint32_t keylen);
+
+#if 1 //shenzheng 2015-6-25 replace server
+struct conn *server_pool_conn_for_replace(struct context *ctx, struct server_pool *pool, struct msg *msg);
+void server_close_for_replace_server(struct server *server);
+#endif //shenzheng 2015-6-25 replace server
+
 rstatus_t server_pool_run(struct server_pool *pool);
 rstatus_t server_pool_preconnect(struct context *ctx);
 void server_pool_disconnect(struct context *ctx);
 rstatus_t server_pool_init(struct array *server_pool, struct array *conf_pool, struct context *ctx);
 void server_pool_deinit(struct array *server_pool);
+
+#if 1 //shenzheng 2015-5-11 config-reload
+rstatus_t server_pool_each_proxy_conn_new(void *elem, void *data);
+rstatus_t server_pool_each_conn_old_close(void *elem, void *data);
+rstatus_t server_pool_each_proxy_conn_reset(void *elem, void *data);
+rstatus_t server_pool_each_client_conn_reset(void *elem, void *data);
+rstatus_t server_pool_old_deinit(struct array *sps, struct context *ctx);
+#endif //shenzheng 2015-5-11 config-reload
 
 #endif

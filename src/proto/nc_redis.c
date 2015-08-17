@@ -172,6 +172,7 @@ redis_arg2(struct msg *r)
     case MSG_REQ_REDIS_ZREMRANGEBYSCORE:
 
     case MSG_REQ_REDIS_RESTORE:
+
         return true;
 
     default:
@@ -261,6 +262,9 @@ redis_argx(struct msg *r)
     switch (r->type) {
     case MSG_REQ_REDIS_MGET:
     case MSG_REQ_REDIS_DEL:
+#if 1 //shenzheng 2014-9-2 replace server
+	case MSG_REQ_REDIS_REPLACE_SERVER:
+#endif //shenzheng 2014-9-2 replace server
         return true;
 
     default:
@@ -339,13 +343,14 @@ redis_parse_req(struct msg *r)
     struct mbuf *b;
     uint8_t *p, *m;
     uint8_t ch;
+	//example : msg->pos = "*3\r\n$3\r\nset\r\n$5\r\nplace\r\n$8\r\nshanghai\r\n"
     enum {
-        SW_START,
-        SW_NARG,
-        SW_NARG_LF,
-        SW_REQ_TYPE_LEN,
-        SW_REQ_TYPE_LEN_LF,
-        SW_REQ_TYPE,
+        SW_START,	// begin to parse
+        SW_NARG,	//arg num
+        SW_NARG_LF,	//the arg num string end "LF" pos
+        SW_REQ_TYPE_LEN,	//redis client request command length
+        SW_REQ_TYPE_LEN_LF,	//the command len string end "LF" pos
+        SW_REQ_TYPE,	//
         SW_REQ_TYPE_LF,
         SW_KEY_LEN,
         SW_KEY_LEN_LF,
@@ -1023,7 +1028,14 @@ redis_parse_req(struct msg *r)
                     r->type = MSG_REQ_REDIS_ZREMRANGEBYLEX;
                     break;
                 }
-
+#if 1 // shenzheng 2014-9-1 replace server
+				if (str14icmp(m, 'r', 'e', 'p', 'l', 'a', 'c', 'e', '_', 's', 'e', 'r', 'v', 'e', 'r')) {
+                    r->type = MSG_REQ_REDIS_REPLACE_SERVER;
+					r->replace_server = 1;
+					log_debug(LOG_DEBUG, "new command : replace_server");
+					break;
+                }
+#endif // shenzheng 2015-6-23 replace server
                 break;
 
             case 15:

@@ -23,8 +23,25 @@
 static uint32_t nfree_mbufq;   /* # free mbuf */
 static struct mhdr free_mbufq; /* free mbuf q */
 
+#if 1 //shenzheng 2015-5-13 proxy administer
+static uint32_t nfree_mbufq_proxy_adm;   /* # free mbuf for proxy administer */
+static struct mhdr free_mbufq_proxy_adm; /* free mbuf q for proxy administer */
+#endif //shenzheng 2015-5-13 proxy administer
+
 static size_t mbuf_chunk_size; /* mbuf chunk size - header + data (const) */
 static size_t mbuf_offset;     /* mbuf offset in chunk (const) */
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+static uint64_t ntotal_mbuf;
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+static uint64_t ntotal_mbuf_proxy_adm;
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
 
 static struct mbuf *
 _mbuf_get(void)
@@ -47,6 +64,12 @@ _mbuf_get(void)
     if (buf == NULL) {
         return NULL;
     }
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	ntotal_mbuf ++;
+#endif
+#endif //shenzheng 2015-3-23 common
 
     /*
      * mbuf header is at the tail end of the mbuf. This enables us to catch
@@ -137,6 +160,20 @@ mbuf_rewind(struct mbuf *mbuf)
     mbuf->pos = mbuf->start;
     mbuf->last = mbuf->start;
 }
+
+#if 1 //shenzheng 2015-4-16 common
+/*
+ * Return the length of data storage in mbuf. Mbuf cannot contain more than
+ * 2^32 bytes (4G).
+ */
+uint32_t
+mbuf_storage_length(struct mbuf *mbuf)
+{
+    ASSERT(mbuf->last >= mbuf->pos);
+
+    return (uint32_t)(mbuf->last - mbuf->start);
+}
+#endif //shenzheng 2015-4-16 common
 
 /*
  * Return the length of data in mbuf. Mbuf cannot contain more than
@@ -245,7 +282,7 @@ mbuf_split(struct mhdr *h, uint8_t *pos, mbuf_copy_t cb, void *cbarg)
         cb(nbuf, cbarg);
     }
 
-    /* copy data from mbuf to nbuf */
+	/* copy data from mbuf to nbuf */
     size = (size_t)(mbuf->last - pos);
     mbuf_copy(nbuf, pos, size);
 
@@ -265,8 +302,25 @@ mbuf_init(struct instance *nci)
     nfree_mbufq = 0;
     STAILQ_INIT(&free_mbufq);
 
+#if 1 //shenzheng 2015-5-13 proxy administer
+	nfree_mbufq_proxy_adm = 0;
+    STAILQ_INIT(&free_mbufq_proxy_adm);
+#endif //shenzheng 2015-5-13 proxy administer
+
     mbuf_chunk_size = nci->mbuf_chunk_size;
     mbuf_offset = mbuf_chunk_size - MBUF_HSIZE;
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	ntotal_mbuf = 0;
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+	ntotal_mbuf_proxy_adm = 0;
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
 
     log_debug(LOG_DEBUG, "mbuf hsize %d chunk size %zu offset %zu length %zu",
               MBUF_HSIZE, mbuf_chunk_size, mbuf_offset, mbuf_offset);
@@ -280,6 +334,145 @@ mbuf_deinit(void)
         mbuf_remove(&free_mbufq, mbuf);
         mbuf_free(mbuf);
         nfree_mbufq--;
+		
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+		ntotal_mbuf--;
+#endif
+#endif //shenzheng 2015-3-23 common
+
     }
+
+#if 1 //shenzheng 2015-5-13 proxy administer
+	while (!STAILQ_EMPTY(&free_mbufq_proxy_adm)) {
+        struct mbuf *mbuf = STAILQ_FIRST(&free_mbufq_proxy_adm);
+        mbuf_remove(&free_mbufq_proxy_adm, mbuf);
+        mbuf_free(mbuf);
+        nfree_mbufq_proxy_adm--;
+
+#ifdef NC_DEBUG_LOG
+		ntotal_mbuf_proxy_adm--;
+#endif
+	}
+#endif //shenzheng 2015-5-13 proxy administer
+
     ASSERT(nfree_mbufq == 0);
+	
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	ASSERT(ntotal_mbuf == 0);
+#endif
+#endif //shenzheng 2015-3-23 common
+
 }
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+uint32_t
+mbuf_nfree_mbuf()
+{
+	return nfree_mbufq;
+}
+
+
+uint64_t
+mbuf_ntotal_mbuf()
+{
+	return ntotal_mbuf;
+}
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+uint32_t
+mbuf_nfree_mbuf_proxy_adm()
+{
+	return nfree_mbufq_proxy_adm;
+}
+
+uint64_t
+mbuf_ntotal_mbuf_proxy_adm()
+{
+	return ntotal_mbuf_proxy_adm;
+}
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-5-13 proxy administer
+static struct mbuf *
+_mbuf_get_proxy_adm(void)
+{
+    struct mbuf *mbuf;
+    uint8_t *buf;
+
+    if (!STAILQ_EMPTY(&free_mbufq_proxy_adm)) {
+        ASSERT(nfree_mbufq_proxy_adm > 0);
+
+        mbuf = STAILQ_FIRST(&free_mbufq_proxy_adm);
+        nfree_mbufq_proxy_adm--;
+        STAILQ_REMOVE_HEAD(&free_mbufq_proxy_adm, next);
+
+        ASSERT(mbuf->magic == MBUF_MAGIC);
+        goto done;
+    }
+
+    buf = nc_alloc(mbuf_chunk_size);
+    if (buf == NULL) {
+        return NULL;
+    }
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+	ntotal_mbuf_proxy_adm ++;
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
+    mbuf = (struct mbuf *)(buf + mbuf_offset);
+    mbuf->magic = MBUF_MAGIC;
+
+done:
+    STAILQ_NEXT(mbuf, next) = NULL;
+    return mbuf;
+}
+
+struct mbuf *
+mbuf_get_proxy_adm(void)
+{
+    struct mbuf *mbuf;
+    uint8_t *buf;
+
+    mbuf = _mbuf_get_proxy_adm();
+    if (mbuf == NULL) {
+        return NULL;
+    }
+
+    buf = (uint8_t *)mbuf - mbuf_offset;
+    mbuf->start = buf;
+    mbuf->end = buf + mbuf_offset;
+
+    ASSERT(mbuf->end - mbuf->start == (int)mbuf_offset);
+    ASSERT(mbuf->start < mbuf->end);
+
+    mbuf->pos = mbuf->start;
+    mbuf->last = mbuf->start;
+
+    log_debug(LOG_VVERB, "get mbuf %p", mbuf);
+
+    return mbuf;
+}
+
+void
+mbuf_put_proxy_adm(struct mbuf *mbuf)
+{
+    log_debug(LOG_VVERB, "put mbuf %p len %d", mbuf, mbuf->last - mbuf->pos);
+
+    ASSERT(STAILQ_NEXT(mbuf, next) == NULL);
+    ASSERT(mbuf->magic == MBUF_MAGIC);
+
+    nfree_mbufq_proxy_adm++;
+    STAILQ_INSERT_HEAD(&free_mbufq_proxy_adm, mbuf, next);
+}
+
+#endif //shenzheng 2015-5-13 proxy administer
+

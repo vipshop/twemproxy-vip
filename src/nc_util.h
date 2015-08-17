@@ -78,6 +78,16 @@
 #define nc_atoi(_line, _n)          \
     _nc_atoi((uint8_t *)_line, (size_t)_n)
 
+#if 1 //shenzheng 2014-9-5 common
+#define nc_itos(_s, _num)			\
+	_nc_itos((struct string *)_s, (int)_num)
+#define nc_ltos(_s, _num)			\
+		_nc_ltos((struct string *)_s, (int64_t)_num)
+#define nc_utos(_s, _num)			\
+	_nc_utos((struct string *)_s, (uint64_t)_num)
+#endif //shenzheng 2015-4-30 common
+
+
 int nc_set_blocking(int sd);
 int nc_set_nonblocking(int sd);
 int nc_set_reuseaddr(int sd);
@@ -89,7 +99,18 @@ int nc_get_soerror(int sd);
 int nc_get_sndbuf(int sd);
 int nc_get_rcvbuf(int sd);
 
+#if 1 //shenzheng 2015-6-5 tcpkeepalive
+int nc_set_tcpkeepalive(int sd, int keepidle, int keepinterval, int keepcount);
+#endif //shenzheng 2015-6-5 tcpkeepalive
+
 int _nc_atoi(uint8_t *line, size_t n);
+
+#if 1 //shenzheng 2014-9-5 common
+void _nc_itos(struct string *s,int num);
+void _nc_ltos(struct string *s, int64_t num);
+void _nc_utos(struct string *s,uint64_t num);
+#endif //shenzheng 2015-4-30 common
+
 bool nc_valid_port(int n);
 
 /*

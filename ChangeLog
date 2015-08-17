@@ -1,3 +1,13 @@
+2015-18-06  deep
+	
+	*twemproxy: version 0.4.6 release
+	 replace_server(redis)
+	 log rotate
+	 tcp keepalive
+	 administration
+	 configuration reload
+	 zookeeper
+
 2014-18-10  idning <idning@gmail.com>
 
     * twemproxy: version 0.4.0 release

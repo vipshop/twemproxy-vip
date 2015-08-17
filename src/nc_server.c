@@ -334,11 +334,11 @@ server_close(struct context *ctx, struct conn *conn)
     struct conn *c_conn;    /* peer client connection */
 
     ASSERT(!conn->client && !conn->proxy);
-
+	
     server_close_stats(ctx, conn->owner, conn->err, conn->eof,
                        conn->connected);
 
-    if (conn->sd < 0) {
+    if (conn->sd < 0) {		
         server_failure(ctx, conn->owner);
         conn->unref(conn);
         conn_put(conn);
@@ -359,20 +359,23 @@ server_close(struct context *ctx, struct conn *conn)
         if (msg->swallow || msg->noreply) {
             log_debug(LOG_INFO, "close s %d swallow req %"PRIu64" len %"PRIu32
                       " type %d", conn->sd, msg->id, msg->mlen, msg->type);
-            req_put(msg);
+
+			req_put(msg);
         } else {
+
             c_conn = msg->owner;
             ASSERT(c_conn->client && !c_conn->proxy);
 
-            msg->done = 1;
-            msg->error = 1;
+			msg->error = 1;
             msg->err = conn->err;
+            msg->done = 1;
 
             if (msg->frag_owner != NULL) {
                 msg->frag_owner->nfrag_done++;
             }
 
             if (req_done(c_conn, TAILQ_FIRST(&c_conn->omsg_q))) {
+
                 event_add_out(ctx->evb, msg->owner);
             }
 
@@ -393,19 +396,21 @@ server_close(struct context *ctx, struct conn *conn)
         if (msg->swallow) {
             log_debug(LOG_INFO, "close s %d swallow req %"PRIu64" len %"PRIu32
                       " type %d", conn->sd, msg->id, msg->mlen, msg->type);
-            req_put(msg);
+			req_put(msg);
         } else {
             c_conn = msg->owner;
             ASSERT(c_conn->client && !c_conn->proxy);
 
-            msg->done = 1;
-            msg->error = 1;
+			msg->error = 1;
             msg->err = conn->err;
+			msg->done = 1;
+			
             if (msg->frag_owner != NULL) {
                 msg->frag_owner->nfrag_done++;
             }
 
             if (req_done(c_conn, TAILQ_FIRST(&c_conn->omsg_q))) {
+
                 event_add_out(ctx->evb, msg->owner);
             }
 
@@ -416,6 +421,7 @@ server_close(struct context *ctx, struct conn *conn)
         }
     }
     ASSERT(TAILQ_EMPTY(&conn->omsg_q));
+
 
     msg = conn->rmsg;
     if (msg != NULL) {
@@ -698,6 +704,7 @@ server_pool_conn(struct context *ctx, struct server_pool *pool, uint8_t *key,
 
     /* from a given {key, keylen} pick a server from pool */
     server = server_pool_server(pool, key, keylen);
+
     if (server == NULL) {
         return NULL;
     }
@@ -716,6 +723,203 @@ server_pool_conn(struct context *ctx, struct server_pool *pool, uint8_t *key,
 
     return conn;
 }
+
+#if 1 //shenzheng 2015-6-25 replace server
+struct conn *
+server_pool_conn_for_replace(struct context *ctx, struct server_pool *pool, struct msg *msg)
+{
+    rstatus_t status;
+	struct sockinfo sock;
+    struct server *curr_ser, *new_ser;
+    struct conn *conn;
+	struct keypos *kp;
+	struct string new_ser_addr;
+	struct string new_ser_host;
+	struct string new_ser_port_str;
+	struct string weight_str;
+	int new_ser_port;
+	uint8_t *p, *q, *last;
+	uint32_t i;
+
+	curr_ser = array_get(&pool->server, msg->mser_idx);
+
+	log_debug(LOG_DEBUG, "curr_ser->name : %s", curr_ser->name.data);
+	
+	new_ser = nc_alloc(sizeof(struct server));
+
+	if (new_ser == NULL) {
+        return NULL;
+    }
+
+	string_init(&new_ser->pname);
+	string_init(&new_ser->name);
+	string_init(&weight_str);
+	string_init(&new_ser_host);
+
+	kp = array_get(msg->keys, 1);
+	new_ser_addr.data = kp->start;
+	new_ser_addr.len = (uint32_t)(kp->end - kp->start);
+	log_debug(LOG_DEBUG, "new_ser_addr.len : %d", new_ser_addr.len);
+	log_debug(LOG_DEBUG, "new_ser_addr.data : %.*s", new_ser_addr.len, new_ser_addr.data);
+	
+	ASSERT(new_ser_addr.len > 0);
+
+	p = new_ser_addr.data;
+	last = new_ser_addr.data + new_ser_addr.len;
+
+	q = nc_strchr(p, last, ':');
+	if(q == NULL || q >= last || q <= new_ser_addr.data)
+	{
+		goto error;
+	}
+
+	status = string_copy(&new_ser_host, new_ser_addr.data, (uint32_t)(q - new_ser_addr.data));
+	if(status != NC_OK)
+	{
+		goto error;
+	}
+
+	new_ser_port_str.data = q + 1;
+	new_ser_port_str.len = (uint32_t)(last - new_ser_port_str.data);
+
+    new_ser_port = nc_atoi(new_ser_port_str.data, new_ser_port_str.len);
+
+	log_debug(LOG_DEBUG, "new_ser_host: %.*s", new_ser_host.len, new_ser_host.data);
+	log_debug(LOG_DEBUG, "new_ser_port_str: %.*s", new_ser_port_str.len, new_ser_port_str.data);
+	log_debug(LOG_DEBUG, "new_ser_port: %d", new_ser_port);
+
+	new_ser->idx = curr_ser->idx;
+	new_ser->owner = curr_ser->owner;
+
+	nc_itos(&weight_str, curr_ser->weight);
+	
+	new_ser->pname.len = new_ser_addr.len + 1 + weight_str.len;
+	new_ser->pname.data = nc_alloc((new_ser->pname.len + 1)*sizeof(uint8_t *));
+	p = new_ser->pname.data;
+	nc_memcpy(p, new_ser_addr.data, new_ser_addr.len);
+	p += new_ser_addr.len;
+	nc_memcpy(p, ":", 1);
+	p += 1;
+	nc_memcpy(p, weight_str.data, weight_str.len);
+	p += weight_str.len;
+	nc_memcpy(p, "\0", 1);
+	log_debug(LOG_DEBUG, "new_ser->pname.len: %d", new_ser->pname.len);
+	log_debug(LOG_DEBUG, "new_ser->pname.data: %s", new_ser->pname.data);
+
+	if(curr_ser->name_null)
+	{
+		status = string_copy(&new_ser->name, new_ser_addr.data, new_ser_addr.len);
+		if(status != NC_OK)
+		{
+			goto error;
+		}
+	}
+	else
+	{
+		new_ser->name = curr_ser->name;
+	}
+	new_ser->port = (uint16_t)new_ser_port;
+	new_ser->weight = curr_ser->weight;
+
+	status = nc_resolve(&new_ser_host, new_ser_port, &sock);
+
+	new_ser->addrlen = sock.addrlen;
+
+	new_ser->addr = nc_alloc(sizeof(struct sockaddr));
+	
+	new_ser->addr->sa_family = ((struct sockaddr*)&sock.addr)->sa_family;
+
+	new_ser->family = new_ser->addr->sa_family;
+	
+	for(i = 0; i < 14; i++)
+	{
+		new_ser->addr->sa_data[i] = (((struct sockaddr*)&sock.addr)->sa_data)[i];
+	}
+	
+	new_ser->ns_conn_q = 0;
+    TAILQ_INIT(&new_ser->s_conn_q);
+	new_ser->next_retry = 0LL;
+	new_ser->failure_count = 0;
+	new_ser->name_null = curr_ser->name_null;	
+
+    /* pick a connection to a given server */
+    conn = server_conn(new_ser);
+    if (conn == NULL) {
+        return NULL;
+    }
+
+    status = server_connect(ctx, new_ser, conn);
+    if (status != NC_OK) {
+        server_close(ctx, conn);
+        return NULL;
+    }
+
+
+	if(!string_empty(&weight_str))
+	{
+		string_deinit(&weight_str);
+	}
+
+	if(!string_empty(&new_ser_host))
+	{
+		string_deinit(&new_ser_host);
+	}
+
+	msg->server = new_ser;
+
+	conn->replace_server = 1;
+	conn->conf_version_curr = ctx->conf_version;
+	conn->ctx = ctx;
+	
+    return conn;
+
+error:
+	if(!string_empty(&new_ser->pname))
+	{
+		string_deinit(&new_ser->pname);
+	}
+
+	if(!string_empty(&new_ser->name) && curr_ser->name_null)
+	{
+		string_deinit(&new_ser->name);
+	}
+
+	if(!string_empty(&weight_str))
+	{
+		string_deinit(&weight_str);
+	}
+
+	if(!string_empty(&new_ser_host))
+	{
+		string_deinit(&new_ser_host);
+	}
+
+	nc_free(new_ser);
+	new_ser = NULL;
+	
+	return NULL;
+}
+
+void
+server_close_for_replace_server(struct server *server)
+{
+	if(server == NULL)
+	{
+		return;
+	}
+	
+	ASSERT(server->ns_conn_q == 0);
+	
+	string_deinit(&server->pname);
+	if(server->name_null)
+	{
+		string_deinit(&server->name);
+	}
+	nc_free(server->addr);
+	nc_free(server);
+}
+
+#endif //shenzheng 2015-6-25 replace server
 
 static rstatus_t
 server_pool_each_preconnect(void *elem, void *data)
@@ -891,7 +1095,7 @@ server_pool_deinit(struct array *server_pool)
         }
 
         server_deinit(&sp->server);
-
+		
         log_debug(LOG_DEBUG, "deinit pool %"PRIu32" '%.*s'", sp->idx,
                   sp->name.len, sp->name.data);
     }
@@ -900,3 +1104,325 @@ server_pool_deinit(struct array *server_pool)
 
     log_debug(LOG_DEBUG, "deinit %"PRIu32" pools", npool);
 }
+
+#if 1 //shenzheng 2015-5-8 config-reload
+static rstatus_t 
+server_pool_each_reset_old(void *elem, void *data)
+{
+	uint32_t idx;
+	struct server_pool *sp, *sp_new;
+	struct context *ctx = data;
+	
+	sp = elem;
+	ASSERT(sp != NULL);
+
+	idx = sp->idx;
+
+	if(!ctx->which_pool)
+	{
+		if(array_n(&ctx->pool_swap) < idx+1)
+		{
+			return NC_OK;
+		}
+		sp_new = array_get(&ctx->pool_swap, idx);
+	}
+	else
+	{
+		if(array_n(&ctx->pool) < idx+1)
+		{
+			return NC_OK;
+		}
+		sp_new = array_get(&ctx->pool, idx);
+	}
+	ASSERT(sp_new != NULL);
+
+	ASSERT(sp->p_conn->owner == sp);
+	
+	sp->p_conn->owner = sp_new;
+	
+	return NC_OK;
+}
+
+static rstatus_t 
+server_each_reset_old(void *elem, void *data)
+{
+	rstatus_t status;
+	uint32_t i, nelem, ns_conn_q_temp;
+	struct conn *conn;
+	struct server *server, *server_new = elem;
+	struct array *servers = data;
+
+	for (i = 0, nelem = array_n(servers); i < nelem; i++) 
+	{
+		server = array_get(servers, i);
+		if(0 == string_compare(&server->pname, &server_new->pname))
+		{
+			
+			log_debug(LOG_DEBUG, "server->pname : %s", server->pname.data);
+			
+			ASSERT(server_new->ns_conn_q == 0 && TAILQ_EMPTY(&server_new->s_conn_q));
+
+			break;
+		}
+	}
+	
+	return NC_OK;
+}
+
+rstatus_t 
+server_pool_each_proxy_conn_new(void *elem, void *data)
+{
+	rstatus_t status;
+	uint32_t i, nelem;
+	struct conn *pconn;
+	struct server_pool *sp, *sp_new = elem;
+	struct array *sps = data;
+	log_debug(LOG_DEBUG, "sp_new->addrstr : %s", sp_new->addrstr.data);
+	for (i = 0, nelem = array_n(sps); i < nelem; i++) 
+	{
+        sp = array_get(sps, i);
+		if(0 == string_compare(&sp->addrstr, &sp_new->addrstr))
+		{
+			return NC_OK;
+		}
+	}
+	status = proxy_init_for_reload(elem);
+	if(status != NC_OK)
+	{
+		return status;
+	}
+	return NC_OK;
+}
+
+rstatus_t 
+server_pool_each_conn_old_close(void *elem, void *data)
+{
+	rstatus_t status;
+	uint32_t i, nelem;
+	struct context *ctx;
+	struct conn *p_conn, *c_conn, *s_conn;
+	struct server_pool *sp, *sp_old = elem;
+	struct server *server;
+	struct array *sps = data;
+	
+	log_debug(LOG_DEBUG, "sp_old->addrstr : %s", sp_old->addrstr.data);
+
+	ctx = sp_old->ctx;
+	ASSERT(ctx != NULL);
+	
+	for (i = 0, nelem = array_n(sps); i < nelem; i++) 
+	{
+        sp = array_get(sps, i);
+		if(0 == string_compare(&sp->addrstr, &sp_old->addrstr))
+		{
+			//return NC_OK;
+			goto server_close;
+		}
+	}
+
+	p_conn = sp_old->p_conn;
+	if(p_conn != NULL)
+	{
+		status = event_del_conn(ctx->evb, p_conn);
+	    if (status < 0) {
+	        log_warn("event del conn client %d failed, ignored: %s",
+	                 p_conn->sd, strerror(errno));
+	    }
+	}
+	proxy_each_deinit(sp_old, NULL);
+
+	while (!TAILQ_EMPTY(&sp_old->c_conn_q)) {			
+
+		ASSERT(sp_old->nc_conn_q > 0);
+		c_conn = TAILQ_FIRST(&sp_old->c_conn_q);
+
+		ASSERT(c_conn->client && !c_conn->proxy);
+		ASSERT(c_conn->addr == NULL);
+
+		status = event_del_conn(ctx->evb, c_conn);
+	    if (status < 0) {
+	        log_warn("event del conn client %d failed, ignored: %s",
+	                 c_conn->sd, strerror(errno));
+	    }
+
+		c_conn->close(ctx, c_conn);
+
+		log_debug(LOG_INFO, "c_conn(%d) removed", c_conn->sd);
+	}
+
+	ASSERT(sp_old->nc_conn_q == 0);
+	ASSERT(TAILQ_EMPTY(&sp_old->c_conn_q));	
+
+server_close:
+	for(i = 0, nelem = array_n(&sp_old->server); i < nelem; i++)
+	{
+		server = array_get(&sp_old->server, i);
+		ASSERT(server != NULL);
+		
+		while (!TAILQ_EMPTY(&server->s_conn_q)) {
+
+	        ASSERT(server->ns_conn_q > 0);
+
+	        s_conn = TAILQ_FIRST(&server->s_conn_q);
+
+			status = event_del_conn(ctx->evb, s_conn);
+		    if (status < 0) {
+		        log_warn("event del conn client %d failed, ignored: %s",
+		                 s_conn->sd, strerror(errno));
+		    }
+
+	        s_conn->close(ctx, s_conn);
+			
+			log_debug(LOG_INFO, "s_conn(%d) removed", s_conn->sd);
+	    }
+
+		ASSERT(server->ns_conn_q == 0);
+		ASSERT(TAILQ_EMPTY(&server->s_conn_q));	
+	}
+	
+	
+	return NC_OK;
+}
+
+rstatus_t 
+server_pool_each_proxy_conn_reset(void *elem, void *data)
+{
+	rstatus_t status;
+	uint32_t i, nelem;
+	struct conn *pconn;
+	struct server_pool *sp, *sp_new = elem;
+	struct array *sps = data;
+	log_debug(LOG_DEBUG, "sp_new->addrstr : %s", sp_new->addrstr.data);
+	for (i = 0, nelem = array_n(sps); i < nelem; i++) 
+	{
+        sp = array_get(sps, i);
+		if(0 == string_compare(&sp->addrstr, &sp_new->addrstr))
+		{
+			pconn = sp->p_conn;
+			
+			ASSERT(pconn != NULL);
+			
+			pconn->owner = sp_new;
+			sp_new->p_conn = pconn;
+			pconn->addr = sp_new->addr;
+			sp->p_conn = NULL;
+			log_debug(LOG_INFO, "p_conn(%d) moved", pconn->sd);
+			return NC_OK;
+		}
+	}
+	return NC_OK;
+}
+
+
+rstatus_t 
+server_pool_each_client_conn_reset(void *elem, void *data)
+{
+	uint32_t i, nelem;
+	struct conn *conn;
+	struct server_pool *sp, *sp_new = elem;
+	struct array *sps = data;
+	log_debug(LOG_DEBUG, "sp_new->addrstr : %s", sp_new->addrstr.data);
+	
+	for (i = 0, nelem = array_n(sps); i < nelem; i++) 
+	{
+        sp = array_get(sps, i);
+		if(0 == string_compare(&sp->addrstr, &sp_new->addrstr))
+		{			
+			if(TAILQ_EMPTY(&sp->c_conn_q))
+			{
+				ASSERT(sp->nc_conn_q == 0);
+				return NC_OK;
+			}
+		
+			while (!TAILQ_EMPTY(&sp->c_conn_q)) {
+			
+				ASSERT(sp->nc_conn_q > 0);
+				conn = TAILQ_FIRST(&sp->c_conn_q);
+
+				ASSERT(conn->client && !conn->proxy);
+				ASSERT(conn->addr == NULL);
+				
+				sp->nc_conn_q--;
+				TAILQ_REMOVE(&sp->c_conn_q, conn, conn_tqe);
+
+				sp_new->nc_conn_q++;
+				TAILQ_INSERT_TAIL(&sp_new->c_conn_q, conn, conn_tqe);
+				conn->owner = sp_new;
+				log_debug(LOG_INFO, "c_conn(%d) moved", conn->sd);
+			}
+			
+			ASSERT(sp->nc_conn_q == 0);
+			ASSERT(TAILQ_EMPTY(&sp->c_conn_q));			
+			
+			break;
+		}
+	}
+	return NC_OK;
+}
+
+
+rstatus_t 
+server_pool_old_deinit(struct array *sps, struct context *ctx)
+{
+	rstatus_t status;
+	bool flag;
+	uint32_t i, nelem, i_p, nelem_p;
+	struct conn *conn, *pconn;
+	struct server *server;
+	struct server_pool *sp;
+	
+	ASSERT(sps != NULL);
+	flag = false;
+	for(i_p = 0, nelem_p = array_n(sps); i_p < nelem_p; i_p++)
+	{
+		sp = array_get(sps, i_p);
+		log_debug(LOG_DEBUG, "sp->addrstr : %s", sp->addrstr.data);
+		pconn = sp->p_conn;
+		if(pconn != NULL)
+		{
+			status = event_del_conn(ctx->evb, pconn);
+		    if (status < 0) {
+		        log_warn("event del conn client %d failed, ignored: %s",
+		                 pconn->sd, strerror(errno));
+		    }
+			pconn->close(ctx, pconn);
+		}		
+
+		for (i = 0, nelem = array_n(&sp->server); i < nelem; i++) 
+		{
+			server = array_get(&sp->server, i);
+
+			for (conn = TAILQ_LAST(&server->s_conn_q, conn_tqh); conn != NULL;
+			conn = pconn) {
+				pconn = TAILQ_PREV(conn, conn_tqh, conn_tqe);
+
+				if(!conn->active(conn))
+				{
+					status = event_del_conn(ctx->evb, conn);
+				    if (status < 0) {
+				        log_warn("event del conn client %d failed, ignored: %s",
+				                 conn->sd, strerror(errno));
+				    }
+				
+					log_debug(LOG_INFO, "s_conn(%d) closed in old pool", conn->sd);
+					conn->close(ctx, conn);
+				}
+				else
+				{
+					flag |= true;
+				}
+			}
+		}
+	}
+	
+	if(flag)
+	{
+		return NC_EAGAIN;
+	}
+	
+	return NC_OK;
+}
+
+
+#endif //shenzheng 2015-5-8 config-reload
+

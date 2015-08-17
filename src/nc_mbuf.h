@@ -56,6 +56,9 @@ void mbuf_deinit(void);
 struct mbuf *mbuf_get(void);
 void mbuf_put(struct mbuf *mbuf);
 void mbuf_rewind(struct mbuf *mbuf);
+#if 1 //shenzheng 2015-4-16 common
+uint32_t mbuf_storage_length(struct mbuf *mbuf);
+#endif //shenzheng 2015-4-16 common
 uint32_t mbuf_length(struct mbuf *mbuf);
 uint32_t mbuf_size(struct mbuf *mbuf);
 size_t mbuf_data_size(void);
@@ -63,5 +66,25 @@ void mbuf_insert(struct mhdr *mhdr, struct mbuf *mbuf);
 void mbuf_remove(struct mhdr *mhdr, struct mbuf *mbuf);
 void mbuf_copy(struct mbuf *mbuf, uint8_t *pos, size_t n);
 struct mbuf *mbuf_split(struct mhdr *h, uint8_t *pos, mbuf_copy_t cb, void *cbarg);
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+uint32_t mbuf_nfree_mbuf(void);
+uint64_t mbuf_ntotal_mbuf(void);
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+uint32_t mbuf_nfree_mbuf_proxy_adm(void);
+uint64_t mbuf_ntotal_mbuf_proxy_adm(void);
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-5-13 proxy administer
+struct mbuf *mbuf_get_proxy_adm(void);
+void mbuf_put_proxy_adm(struct mbuf *mbuf);
+#endif //shenzheng 2015-5-13 proxy administer
+
 
 #endif

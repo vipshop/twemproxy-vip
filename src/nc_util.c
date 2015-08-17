@@ -180,6 +180,61 @@ nc_get_rcvbuf(int sd)
     return size;
 }
 
+#if 1 //shenzheng 2015-6-5 tcpkeepalive
+int
+nc_set_tcpkeepalive(int sd, int keepidle, int keepinterval, int keepcount)
+{
+	rstatus_t status;
+    int tcpkeepalive;
+    socklen_t len;
+
+    tcpkeepalive = 1;
+    len = sizeof(tcpkeepalive);
+
+    status = setsockopt(sd, SOL_SOCKET, SO_KEEPALIVE, &tcpkeepalive, len);
+	if(status < 0)
+	{
+		log_error("error: setsockopt SO_KEEPALIVE call error(%s)", strerror(errno));
+		return NC_ERROR;
+	}
+	
+	if(keepidle > 0)
+	{
+		len = sizeof(keepidle);
+		status = setsockopt(sd, SOL_TCP, TCP_KEEPIDLE, &keepidle, len);
+		if(status < 0)
+		{
+			log_error("error: setsockopt TCP_KEEPIDLE call error(%s)", strerror(errno));
+			return NC_ERROR;
+		}
+	}
+
+	if(keepinterval > 0)
+	{
+		len = sizeof(keepinterval);
+		status = setsockopt(sd, SOL_TCP, TCP_KEEPINTVL, &keepinterval, len);
+		if(status < 0)
+		{
+			log_error("error: setsockopt TCP_KEEPINTVL call error(%s)", strerror(errno));
+			return NC_ERROR;
+		}
+	}
+
+	if(keepcount > 0)
+	{
+		len = sizeof(keepcount);
+		status = setsockopt(sd, SOL_TCP, TCP_KEEPCNT, &keepcount, len);
+		if(status < 0)
+		{
+			log_error("error: setsockopt TCP_KEEPCNT call error(%s)", strerror(errno));
+			return NC_ERROR;
+		}
+	}
+
+	return NC_OK;
+}
+#endif //shenzheng 2015-6-5 tcpkeepalive
+
 int
 _nc_atoi(uint8_t *line, size_t n)
 {
@@ -203,6 +258,201 @@ _nc_atoi(uint8_t *line, size_t n)
 
     return value;
 }
+
+#if 1 // shenzheng 2014-9-5 common
+
+void 
+_nc_itos(struct string *s, int num)
+{
+	uint32_t size, step;
+	uint8_t c;
+    uint8_t *data;
+	bool sign = false;
+
+	if(s == NULL)
+	{
+		return;
+	}
+
+	size = 6;
+	step = 3;
+
+	data= nc_zalloc(sizeof(uint8_t)*(size + 1));
+
+	uint32_t len, i;
+    len = 0;
+
+	if(num < 0)
+	{
+		sign = true;
+		num = abs(num);
+	}
+	else if(num == 0)
+	{
+		data[len++] = '0';
+		goto done;
+	}
+
+
+    while(num % 10 || num /10)
+    {
+    	c = num %10 + '0';
+        num = num /10;
+        data[len+1] = data[len];
+        data[len] = c;
+        len ++;
+		if(len >= size)
+		{
+			size += step;
+			data = nc_realloc(data, sizeof(uint8_t)*size);
+		}
+    }
+
+	if(sign)
+	{
+		data[len++] = '-';
+	}
+	
+	for(i = 0; i < len/2; i ++)
+	{
+		c = data[i];
+		data[i] = data[len - i -1];
+		data[len - i -1] = c;
+	}
+
+done:
+	string_deinit(s);
+	s->len = len;
+	s->data = data;
+}
+
+
+void 
+_nc_ltos(struct string *s, int64_t num)
+{
+	uint32_t size, step;
+	uint8_t c;
+    uint8_t *data;
+	bool sign = false;
+
+	if(s == NULL)
+	{
+		return;
+	}
+
+	size = 6;
+	step = 3;
+
+	data= nc_zalloc(sizeof(uint8_t)*(size + 1));
+
+	uint32_t len, i;
+    len = 0;
+
+	if(num < 0)
+	{
+		sign = true;
+		num = labs(num);
+	}
+	else if(num == 0)
+	{
+		data[len++] = '0';
+		goto done;
+	}
+
+
+    while(num % 10 || num /10)
+    {
+    	c = num %10 + '0';
+        num = num /10;
+        data[len+1] = data[len];
+        data[len] = c;
+        len ++;
+		if(len >= size)
+		{
+			size += step;
+			data = nc_realloc(data, sizeof(uint8_t)*size);
+		}
+    }
+
+	if(sign)
+	{
+		data[len++] = '-';
+	}
+	
+	for(i = 0; i < len/2; i ++)
+	{
+		c = data[i];
+		data[i] = data[len - i -1];
+		data[len - i -1] = c;
+	}
+
+done:
+	string_deinit(s);
+	s->len = len;
+	s->data = data;
+}
+
+void 
+_nc_utos(struct string *s, uint64_t num)
+{
+	uint32_t size, step;
+	uint8_t c;
+    uint8_t *data;
+	bool sign = false;
+
+	if(s == NULL)
+	{
+		return;
+	}
+
+	size = 6;
+	step = 3;
+
+	data= nc_zalloc(sizeof(uint8_t)*(size + 1));
+
+	uint32_t len, i;
+    len = 0;
+
+	if(num == 0)
+	{
+		data[len++] = '0';
+		goto done;
+	}
+
+    while(num % 10 || num /10)
+    {
+    	c = num %10 + '0';
+        num = num /10;
+        data[len+1] = data[len];
+        data[len] = c;
+        len ++;
+		if(len >= size)
+		{
+			size += step;
+			data = nc_realloc(data, sizeof(uint8_t)*size);
+		}
+    }
+
+	if(sign)
+	{
+		data[len++] = '-';
+	}
+	
+	for(i = 0; i < len/2; i ++)
+	{
+		c = data[i];
+		data[i] = data[len - i -1];
+		data[len - i -1] = c;
+	}
+
+done:
+	string_deinit(s);
+	s->len = len;
+	s->data = data;
+}
+
+
+#endif // shenzheng 2015-4-30 common
 
 bool
 nc_valid_port(int n)

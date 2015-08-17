@@ -31,6 +31,15 @@ Few checklists:
 + use CFLAGS="-O1" ./configure && make
 + use CFLAGS="-O3 -fno-strict-aliasing" ./configure && make
 
+## New Features
+
++ New command: replace_server(now just for redis).
++ Log rotate: we add three startup items:-R(--log-rotate), -M(--log-file-max-size) and -C(--log-file-count). If you want use this function, use -R to run the nutcracker. -M requires a file size between 1000000 and 1122601371959296 bytes(1PB). -C requires an integer between -1 and 200, -1 means do not delete old log files, 0 means delete all old log files, N(0<N<=200) means retain N old log files and old log files naming:logfilename_time.
++ Tcp keepalive: add tcp keepalive for twemproxy.
++ Administration: add administration for twemproxy. Use telnet to connect administer.
++ Configuration reload: let twemproxy can reload configuration on runtime.
++ Zookeeper: add zookeeper for twemproxy. twemproxy can start and keep with zookeeper.
+
 ## Features
 
 + Fast.
@@ -50,25 +59,35 @@ Few checklists:
 
 ## Help
 
-    Usage: nutcracker [-?hVdDt] [-v verbosity level] [-o output file]
-                      [-c conf file] [-s stats port] [-a stats addr]
-                      [-i stats interval] [-p pid file] [-m mbuf size]
+	Usage: nutcracker [-?hVdDt] [-v verbosity level] [-o output file]
+					  [-c conf file] [-s stats port] [-a stats addr]
+					  [-i stats interval] [-p pid file] [-m mbuf size]
 
-    Options:
-      -h, --help             : this help
-      -V, --version          : show version and exit
-      -t, --test-conf        : test configuration for syntax errors and exit
-      -d, --daemonize        : run as a daemon
-      -D, --describe-stats   : print stats description and exit
-      -v, --verbosity=N      : set logging level (default: 5, min: 0, max: 11)
-      -o, --output=S         : set logging file (default: stderr)
-      -c, --conf-file=S      : set configuration file (default: conf/nutcracker.yml)
-      -s, --stats-port=N     : set stats monitoring port (default: 22222)
-      -a, --stats-addr=S     : set stats monitoring ip (default: 0.0.0.0)
-      -i, --stats-interval=N : set stats aggregation interval in msec (default: 30000 msec)
-      -p, --pid-file=S       : set pid file (default: off)
-      -m, --mbuf-size=N      : set size of mbuf chunk in bytes (default: 16384 bytes)
-
+	Options:
+	  -h, --help                : this help
+	  -V, --version             : show version and exit
+	  -t, --test-conf           : test configuration for syntax errors and exit
+	  -d, --daemonize           : run as a daemon
+	  -D, --describe-stats      : print stats description and exit
+	  -v, --verbosity=N         : set logging level (default: 5, min: 0, max: 11)
+	  -o, --output=S            : set logging file (default: stderr)
+	  -c, --conf-file=S         : set configuration file (default: conf/nutcracker.yml)
+	  -s, --stats-port=N        : set stats monitoring port (default: 22222)
+	  -a, --stats-addr=S        : set stats monitoring ip (default: 0.0.0.0)
+	  -i, --stats-interval=N    : set stats aggregation interval in msec (default: 30000 msec)
+	  -p, --pid-file=S          : set pid file (default: off)
+	  -m, --mbuf-size=N         : set size of mbuf chunk in bytes (default: 16384 bytes)
+	  
+	  -R, --log-rorate          : enable log rorate
+	  -M, --log-file-max-size=N : set max size per log file if log-rorate open (default: 1073741824 bytes, min: 1000000 bytes, max: 1122601371959296 bytes)
+	  -C, --log-file-count=N    : set total count of log files to leave if log-rorate open (default: 10, min: -1, max: 200)
+	  -A, --proxy-adm-addr=S    : set proxy administer monitoring ip (default: 0.0.0.0)
+	  -P, --proxy-adm-port=N    : set proxy administer monitoring port (default: 0, means disabled)
+	  -S, --zk-start            : set configuration from zookeeper
+	  -K, --zk-keep             : set configuration keep with zookeeper
+	  -z, --zk-server=S         : set zookeeper servers address (default: 127.0.0.1:2181)
+	  -Z, --zk-path=S           : set zookeeper configuration path (default: /twemproxy)
+  
 ## Zero Copy
 
 In nutcracker, all the memory for incoming requests and outgoing responses is allocated in mbuf. Mbuf enables zero-copy because the same buffer on which a request was received from the client is used for forwarding it to the server. Similarly the same mbuf on which a response was received from the server is used for forwarding it to the client.
@@ -107,9 +126,12 @@ nutcracker can be configured through a YAML file specified by the -c or --conf-f
 + **server_retry_timeout**: The timeout value in msec to wait for before retrying on a temporarily ejected server, when auto_eject_host is set to true. Defaults to 30000 msec.
 + **server_failure_limit**: The number of consecutive failures on a server that would lead to it being temporarily ejected when auto_eject_host is set to true. Defaults to 2.
 + **servers**: A list of server address, port and weight (name:port:weight or ip:port:weight) for this server pool.
++ **tcpkeepalive**: A boolean value that controls if tcp keepalive enabled. Defaults to false.
++ **tcpkeepidle**: The time value in msec that a connection is in idle, and then twemproxy check this connection whether dead or not. 
++ **tcpkeepcnt**: The number of tcpkeepalive attempt check if one idle connection dead times when the client always had no reply. 
++ **tcpkeepintvl**: The time value in msec that the interval between every tcpkeepalive check when the client always had no reply.
 
-
-For example, the configuration file in [conf/nutcracker.yml](conf/nutcracker.yml), also shown below, configures 5 server pools with names - _alpha_, _beta_, _gamma_, _delta_ and omega. Clients that intend to send requests to one of the 10 servers in pool delta connect to port 22124 on 127.0.0.1. Clients that intend to send request to one of 2 servers in pool omega connect to unix path /tmp/gamma. Requests sent to pool alpha and omega have no timeout and might require timeout functionality to be implemented on the client side. On the other hand, requests sent to pool beta, gamma and delta timeout after 400 msec, 400 msec and 100 msec respectively when no response is received from the server. Of the 5 server pools, only pools alpha, gamma and delta are configured to use server ejection and hence are resilient to server failures. All the 5 server pools use ketama consistent hashing for key distribution with the key hasher for pools alpha, beta, gamma and delta set to fnv1a_64 while that for pool omega set to hsieh. Also only pool beta uses [nodes names](notes/recommendation.md#node-names-for-consistent-hashing) for consistent hashing, while pool alpha, gamma, delta and omega use 'host:port:weight' for consistent hashing. Finally, only pool alpha and beta can speak redis protocol, while pool gamma, deta and omega speak memcached protocol.
+For example, the configuration file in [conf/nutcracker.yml](conf/nutcracker.yml), also shown below, configures 7 server pools with names - _alpha_, _beta_, _gamma_, _delta_, omega, master and slave. Clients that intend to send requests to one of the 10 servers in pool delta connect to port 22124 on 127.0.0.1. Clients that intend to send request to one of 2 servers in pool omega connect to unix path /tmp/gamma. Requests sent to pool alpha and omega have no timeout and might require timeout functionality to be implemented on the client side. On the other hand, requests sent to pool beta, gamma and delta timeout after 400 msec, 400 msec and 100 msec respectively when no response is received from the server. Of the 5 server pools, only pools alpha, gamma and delta are configured to use server ejection and hence are resilient to server failures. All the 5 server pools use ketama consistent hashing for key distribution with the key hasher for pools alpha, beta, gamma and delta set to fnv1a_64 while that for pool omega set to hsieh. Also only pool beta uses [nodes names](notes/recommendation.md#node-names-for-consistent-hashing) for consistent hashing, while pool alpha, gamma, delta and omega use 'host:port:weight' for consistent hashing. Finally, only pool alpha and beta can speak redis protocol, while pool gamma, deta and omega speak memcached protocol.
 
     alpha:
       listen: 127.0.0.1:22121
@@ -117,6 +139,10 @@ For example, the configuration file in [conf/nutcracker.yml](conf/nutcracker.yml
       distribution: ketama
       auto_eject_hosts: true
       redis: true
+	  tcpkeepalive: true
+	  tcpkeepidle: 800
+	  tcpkeepcnt: 3
+	  tcpkeepintvl: 60
       server_retry_timeout: 2000
       server_failure_limit: 1
       servers:
@@ -178,7 +204,36 @@ For example, the configuration file in [conf/nutcracker.yml](conf/nutcracker.yml
       servers:
        - 127.0.0.1:11214:100000
        - 127.0.0.1:11215:1
-
+	   
+	master:
+      listen: 127.0.0.1:22125
+      hash: fnv1a_64
+      hash_tag: "{}"
+      distribution: ketama
+      auto_eject_hosts: true
+      timeout: 400
+      redis: false
+      servers:
+       - 127.0.0.1:6380:1 server1
+       - 127.0.0.1:6381:1 server2
+       - 127.0.0.1:6382:1 server3
+       - 127.0.0.1:6383:1 server4
+	   
+	slave:
+      listen: 127.0.0.1:22126
+      hash: fnv1a_64
+      hash_tag: "{}"
+      distribution: ketama
+      auto_eject_hosts: true
+      timeout: 400
+      redis: false
+      servers:
+       - 127.0.0.1:6390:1 server1
+       - 127.0.0.1:6392:1 server2
+       - 127.0.0.1:6393:1 server3
+       - 127.0.0.1:6394:1 server4
+	   
+	   
 Finally, to make writing syntactically correct configuration file easier, nutcracker provides a command-line argument -t or --test-conf that can be used to test the YAML configuration file for any syntax error.
 
 ## Observability

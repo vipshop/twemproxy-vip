@@ -85,6 +85,16 @@ struct conn {
     unsigned           done:1;        /* done? aka close? */
     unsigned           redis:1;       /* redis? */
     unsigned           need_auth:1;   /* need_auth? */
+
+#if 1 //shenzheng 2015-7-14 config-reload
+	unsigned           reload_conf:1;   /* for reload_conf? */
+#endif //shenzheng 2015-7-14 config-reload
+
+#if 1 //shenzheng 2015-7-28 replace server
+	unsigned		   replace_server:1;/* 1:this msg is for replace_server command, 0:other msgs */
+	long long		   conf_version_curr;
+	struct context 	   *ctx;
+#endif //shenzheng 2015-7-28 replace server
 };
 
 TAILQ_HEAD(conn_tqh, conn);
@@ -100,5 +110,23 @@ void conn_deinit(void);
 uint32_t conn_ncurr_conn(void);
 uint64_t conn_ntotal_conn(void);
 uint32_t conn_ncurr_cconn(void);
+
+#if 1 //shenzheng 2015-4-27 proxy administer
+uint32_t conn_ncurr_conn_proxy_adm(void);
+uint64_t conn_ntotal_conn_proxy_adm(void);
+uint32_t conn_ncurr_cconn_proxy_adm(void);
+void conn_put_proxy_adm(struct conn *conn);
+struct conn * conn_get_proxy_adm(void *owner, int sd, bool client);
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-7-9 config-reload
+struct conn * conn_get_proxy_for_reload(void *owner);
+struct conn * conn_get_for_reload(void *owner);
+void conn_put_for_reload(struct conn *conn);
+#endif //shenzheng 2015-7-9 config-reload
+
+#if 1 //shenzheng 2015-7-28 replace server
+void conn_close_for_replace_server(struct conn *conn, int err);
+#endif //shenzheng 2015-7-28 replace server
 
 #endif

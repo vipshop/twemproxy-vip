@@ -84,9 +84,21 @@ signal_handler(int signo)
 
     switch (signo) {
     case SIGUSR1:
+#if 1 //shenzheng 2015-3-26 for debug
+#ifdef NC_DEBUG_LOG
+		actionstr = ", print timeout used msgs";
+		action = print_timeout_used_msgs;
+#endif
+#endif //shenzheng 2015-3-26 for debug
         break;
 
     case SIGUSR2:
+#if 1 //shenzheng 2015-3-26 for debug
+#ifdef NC_DEBUG_LOG
+		actionstr = ", print used msgs";
+		action = print_used_msgs;
+#endif
+#endif //shenzheng 2015-3-26 for debug
         break;
 
     case SIGTTIN:

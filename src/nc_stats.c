@@ -369,6 +369,52 @@ stats_create_buf(struct stats *st)
     size += int64_max_digits;
     size += key_value_extra;
 
+#if 1 //shenzheng 2015-7-9 proxy administer
+	size += st->ncurr_conn_str_a.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	size += st->ntotal_msg_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->nfree_msg_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->ntotal_mbuf_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->nfree_mbuf_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+	size += st->ntotal_msg_str_proxy_adm.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->nfree_msg_str_proxy_adm.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->ntotal_mbuf_str_proxy_adm.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->nfree_mbuf_str_proxy_adm.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
     /* server pools */
     for (i = 0; i < array_n(&st->sum); i++) {
         struct stats_pool *stp = array_get(&st->sum, i);
@@ -526,6 +572,61 @@ stats_add_header(struct stats *st)
         return status;
     }
 
+#if 1 //shenzheng 2015-7-9 proxy administer
+	status = stats_add_num(st, &st->ncurr_conn_str_a, conn_ncurr_conn_proxy_adm());
+    if (status != NC_OK) {
+        return status;
+    }
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	status = stats_add_num(st, &st->ntotal_msg_str, msg_ntotal_msg());
+    if (status != NC_OK) {
+        return status;
+    }
+
+	status = stats_add_num(st, &st->nfree_msg_str, msg_nfree_msg());
+    if (status != NC_OK) {
+        return status;
+    }
+
+	status = stats_add_num(st, &st->ntotal_mbuf_str, mbuf_ntotal_mbuf());
+    if (status != NC_OK) {
+        return status;
+    }
+
+	status = stats_add_num(st, &st->nfree_mbuf_str, mbuf_nfree_mbuf());
+    if (status != NC_OK) {
+        return status;
+    }
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+	status = stats_add_num(st, &st->ntotal_msg_str_proxy_adm, msg_ntotal_msg_proxy_adm());
+    if (status != NC_OK) {
+        return status;
+    }
+
+	status = stats_add_num(st, &st->nfree_msg_str_proxy_adm, msg_nfree_msg_proxy_adm());
+    if (status != NC_OK) {
+        return status;
+    }
+
+	status = stats_add_num(st, &st->ntotal_mbuf_str_proxy_adm, mbuf_ntotal_mbuf_proxy_adm());
+    if (status != NC_OK) {
+        return status;
+    }
+
+	status = stats_add_num(st, &st->nfree_mbuf_str_proxy_adm, mbuf_nfree_mbuf_proxy_adm());
+    if (status != NC_OK) {
+        return status;
+    }
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
     return NC_OK;
 }
 
@@ -647,6 +748,12 @@ stats_aggregate_metric(struct array *dst, struct array *src)
 
         case STATS_GAUGE:
             stm2->value.counter += stm1->value.counter;
+#if 1 //shenzheng 2015-5-29 config-reload
+			if(stm2->value.counter <= 0)
+			{
+				stm2->value.counter = 0;
+			}
+#endif //shenzheng 2015-5-29 config-reload
             break;
 
         case STATS_TIMESTAMP:
@@ -776,13 +883,13 @@ stats_send_rsp(struct stats *st)
     log_debug(LOG_VERB, "send stats on sd %d %d bytes", sd, st->buf.len);
 
     n = nc_sendn(sd, st->buf.data, st->buf.len);
-    if (n < 0) {
+    
+	if (n < 0) {
         log_error("send stats on sd %d failed: %s", sd, strerror(errno));
         close(sd);
         return NC_ERROR;
     }
-
-    close(sd);
+	close(sd);
 
     return NC_OK;
 }
@@ -793,15 +900,93 @@ stats_loop_callback(void *arg1, void *arg2)
     struct stats *st = arg1;
     int n = *((int *)arg2);
 
+#if 1 //shenzheng 2015-5-14 config-reload
+	bool flag = false;
+
+	if(st->pause)
+	{		
+		if(st->reload_thread)
+		{
+			rstatus_t status;
+			struct context *ctx;
+			struct array *pools_curr;
+
+			ctx = st->ctx;
+
+			ASSERT(ctx != NULL);
+
+			if(ctx->which_pool)
+			{
+				pools_curr = &ctx->pool_swap;
+			}
+			else
+			{
+				pools_curr = &ctx->pool;
+			}
+			
+			status = stats_recreate(ctx, pools_curr);
+			if(status != NC_OK)
+			{
+				log_error("error: stats_recreate error.");
+				return;
+			}
+		
+			stats_recreate_buf(st);
+			st->reload_thread = 0;
+			st->pause = 0;
+		}
+	
+		if(n == 0)
+		{
+			return;
+		}
+	
+	    int sd;
+		sd = accept(st->sd, NULL, NULL);
+    	if (sd < 0) {
+	        log_error("accept on m %d failed: %s", st->sd, strerror(errno));
+	        return;
+	    }
+
+	    log_debug(LOG_VERB, "send stats on sd %d %d bytes", sd, st->buf.len);
+
+	    n = nc_sendn(sd, st->buf.data, st->buf.len);
+	    
+		if (n < 0) {
+	        log_error("send stats on sd %d failed: %s", sd, strerror(errno));
+	        close(sd);
+	        return;
+	    }
+		close(sd);
+
+		return;
+	}
+
+	if(st->reload_thread)
+	{
+		//stats_recreate_buf(st);
+		//flag = true;
+		//st->reload_thread = 0;
+		//st->pause = 0;
+	}
+#endif //shenzheng 2015-5-16 config-reload
     /* aggregate stats from shadow (b) -> sum (c) */
     stats_aggregate(st);
-
+	
     if (n == 0) {
         return;
     }
 
     /* send aggregate stats sum (c) to collector */
     stats_send_rsp(st);
+	
+#if 0 //shenzheng 2015-7-16 config-reload
+	if(st->reload_thread && flag == true)
+	{
+		st->reload_thread = 0;
+	}
+#endif //shenzheng 2015-7-16 config-reload
+
 }
 
 static void *
@@ -930,6 +1115,28 @@ stats_create(uint16_t stats_port, char *stats_ip, int stats_interval,
     string_set_text(&st->ntotal_conn_str, "total_connections");
     string_set_text(&st->ncurr_conn_str, "curr_connections");
 
+#if 1 //shenzheng 2015-7-9 proxy administer
+	string_set_text(&st->ncurr_conn_str_a, "curr_connections_a");
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	string_set_text(&st->ntotal_msg_str, "total_msgs");
+    string_set_text(&st->nfree_msg_str, "free_msgs");
+	string_set_text(&st->ntotal_mbuf_str, "total_mbufs");
+    string_set_text(&st->nfree_mbuf_str, "free_mbufs");
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+	string_set_text(&st->ntotal_msg_str_proxy_adm, "total_msgs_a");
+    string_set_text(&st->nfree_msg_str_proxy_adm, "free_msgs_a");
+	string_set_text(&st->ntotal_mbuf_str_proxy_adm, "total_mbufs_a");
+    string_set_text(&st->nfree_mbuf_str_proxy_adm, "free_mbufs_a");
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
     st->updated = 0;
     st->aggregate = 0;
 
@@ -960,6 +1167,12 @@ stats_create(uint16_t stats_port, char *stats_ip, int stats_interval,
         goto error;
     }
 
+#if 1 //shenzheng 2015-5-14 config-reload
+	st->reload_thread = 0;
+	st->pause = 0;
+	st->ctx = NULL;
+#endif //shenzheng 2015-7-16 config-reload
+
     return st;
 
 error:
@@ -984,6 +1197,13 @@ stats_swap(struct stats *st)
     if (!stats_enabled) {
         return;
     }
+
+#if 1 //shenzheng 2015-5-15 config-reload
+	if(st->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-15 config-reload
 
     if (st->aggregate == 1) {
         log_debug(LOG_PVERB, "skip swap of current %p shadow %p as aggregator "
@@ -1040,6 +1260,13 @@ _stats_pool_incr(struct context *ctx, struct server_pool *pool,
                  stats_pool_field_t fidx)
 {
     struct stats_metric *stm;
+		
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_pool_to_metric(ctx, pool, fidx);
 
@@ -1055,6 +1282,13 @@ _stats_pool_decr(struct context *ctx, struct server_pool *pool,
                  stats_pool_field_t fidx)
 {
     struct stats_metric *stm;
+		
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_pool_to_metric(ctx, pool, fidx);
 
@@ -1070,6 +1304,13 @@ _stats_pool_incr_by(struct context *ctx, struct server_pool *pool,
                     stats_pool_field_t fidx, int64_t val)
 {
     struct stats_metric *stm;
+		
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_pool_to_metric(ctx, pool, fidx);
 
@@ -1085,12 +1326,19 @@ _stats_pool_decr_by(struct context *ctx, struct server_pool *pool,
                     stats_pool_field_t fidx, int64_t val)
 {
     struct stats_metric *stm;
+		
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_pool_to_metric(ctx, pool, fidx);
 
     ASSERT(stm->type == STATS_GAUGE);
     stm->value.counter -= val;
-
+	
     log_debug(LOG_VVVERB, "decr by field '%.*s' to %"PRId64"", stm->name.len,
               stm->name.data, stm->value.counter);
 }
@@ -1100,6 +1348,13 @@ _stats_pool_set_ts(struct context *ctx, struct server_pool *pool,
                    stats_pool_field_t fidx, int64_t val)
 {
     struct stats_metric *stm;
+		
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_pool_to_metric(ctx, pool, fidx);
 
@@ -1142,6 +1397,13 @@ _stats_server_incr(struct context *ctx, struct server *server,
 {
     struct stats_metric *stm;
 
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
+
     stm = stats_server_to_metric(ctx, server, fidx);
 
     ASSERT(stm->type == STATS_COUNTER || stm->type == STATS_GAUGE);
@@ -1156,6 +1418,13 @@ _stats_server_decr(struct context *ctx, struct server *server,
                    stats_server_field_t fidx)
 {
     struct stats_metric *stm;
+		
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_server_to_metric(ctx, server, fidx);
 
@@ -1171,6 +1440,13 @@ _stats_server_incr_by(struct context *ctx, struct server *server,
                       stats_server_field_t fidx, int64_t val)
 {
     struct stats_metric *stm;
+		
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_server_to_metric(ctx, server, fidx);
 
@@ -1186,6 +1462,13 @@ _stats_server_decr_by(struct context *ctx, struct server *server,
                       stats_server_field_t fidx, int64_t val)
 {
     struct stats_metric *stm;
+		
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_server_to_metric(ctx, server, fidx);
 
@@ -1201,6 +1484,13 @@ _stats_server_set_ts(struct context *ctx, struct server *server,
                      stats_server_field_t fidx, int64_t val)
 {
     struct stats_metric *stm;
+	
+#if 1 //shenzheng 2015-5-14 config-reload
+	if(ctx->stats->pause)
+	{
+		return;
+	}
+#endif //shenzheng 2015-5-14 config-reload
 
     stm = stats_server_to_metric(ctx, server, fidx);
 
@@ -1210,3 +1500,388 @@ _stats_server_set_ts(struct context *ctx, struct server *server,
     log_debug(LOG_VVVERB, "set ts field '%.*s' to %"PRId64"", stm->name.len,
               stm->name.data, stm->value.timestamp);
 }
+
+#if 1 //shenzheng 2015-6-11 config-reload
+void
+_stats_pool_incr_by_anyway(struct context *ctx, struct server_pool *pool,
+                    stats_pool_field_t fidx, int64_t val)
+{
+    struct stats_metric *stm;
+
+    stm = stats_pool_to_metric(ctx, pool, fidx);
+
+    ASSERT(stm->type == STATS_COUNTER || stm->type == STATS_GAUGE);
+    stm->value.counter += val;
+
+    log_debug(LOG_VVVERB, "incr by field '%.*s' to %"PRId64"", stm->name.len,
+              stm->name.data, stm->value.counter);
+}
+
+void
+_stats_server_incr_by_anyway(struct context *ctx, struct server *server,
+                      stats_server_field_t fidx, int64_t val)
+{
+    struct stats_metric *stm;
+
+    stm = stats_server_to_metric(ctx, server, fidx);
+
+    ASSERT(stm->type == STATS_COUNTER || stm->type == STATS_GAUGE);
+    stm->value.counter += val;
+
+    log_debug(LOG_VVVERB, "incr by field '%.*s' to %"PRId64"", stm->name.len,
+              stm->name.data, stm->value.counter);
+}
+
+#endif //shenzheng 2015-6-11 config-reload
+
+#if 1 //shenzheng 2015-5-14 config-reload
+struct stats *
+stats_recreate_old(struct context *ctx, struct array *server_pool)
+{
+    rstatus_t status;
+    struct stats *st, *st_curr;
+	st_curr = ctx->stats;
+	//st = ctx->stats_swap;
+	ASSERT(st_curr != NULL);
+
+	if(st == NULL)
+	{
+		st = nc_alloc(sizeof(*st));
+		st->port = st_curr->port;
+	    st->interval = st_curr->interval;
+		st->addr = st_curr->addr;
+
+		st->tid = st_curr->tid;
+		st->sd = st_curr->sd;
+		//st->owner = ctx;
+	}
+	else
+	{
+		stats_pool_unmap(&st->sum);
+	    stats_pool_unmap(&st->shadow);
+	    stats_pool_unmap(&st->current);
+	    stats_destroy_buf(st);
+
+		ASSERT(st->port == st_curr->port);
+		ASSERT(st->interval == st_curr->interval);
+		ASSERT(st->addr.data == st_curr->addr.data);
+		ASSERT(st->addr.len == st_curr->addr.len);
+		ASSERT(st->tid == st_curr->tid);
+		ASSERT(st->sd == st_curr->sd);
+		//ASSERT(st->owner == ctx);
+	}
+
+    if (st == NULL) {
+        return NULL;
+    }
+
+    st->start_ts = (int64_t)time(NULL);
+
+    st->buf.len = 0;
+    st->buf.data = NULL;
+    st->buf.size = 0;
+
+    array_null(&st->current);
+    array_null(&st->shadow);
+    array_null(&st->sum);
+
+    string_set_text(&st->service_str, "service");
+    string_set_text(&st->service, "nutcracker");
+
+    string_set_text(&st->source_str, "source");
+    //string_set_raw(&st->source, st_curr->source);
+    st->source = st_curr->source;
+
+    string_set_text(&st->version_str, "version");
+    string_set_text(&st->version, NC_VERSION_STRING);
+
+    string_set_text(&st->uptime_str, "uptime");
+    string_set_text(&st->timestamp_str, "timestamp");
+
+    string_set_text(&st->ntotal_conn_str, "total_connections");
+    string_set_text(&st->ncurr_conn_str, "curr_connections");
+	
+#if 1 //shenzheng 2015-7-9 proxy administer
+	string_set_text(&st->ncurr_conn_str_a, "curr_connections_a");
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	string_set_text(&st->ntotal_msg_str, "total_msgs");
+    string_set_text(&st->nfree_msg_str, "free_msgs");
+	string_set_text(&st->ntotal_mbuf_str, "total_mbufs");
+    string_set_text(&st->nfree_mbuf_str, "free_mbufs");
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+	string_set_text(&st->ntotal_msg_str_proxy_adm, "total_msgs_a");
+	string_set_text(&st->nfree_msg_str_proxy_adm, "free_msgs_a");
+	string_set_text(&st->ntotal_mbuf_str_proxy_adm, "total_mbufs_a");
+	string_set_text(&st->nfree_mbuf_str_proxy_adm, "free_mbufs_a");
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
+    st->updated = 0;
+    st->aggregate = 0;
+
+    /* map server pool to current (a), shadow (b) and sum (c) */
+
+    status = stats_pool_map(&st->current, server_pool);
+    if (status != NC_OK) {
+        goto error;
+    }
+
+    status = stats_pool_map(&st->shadow, server_pool);
+    if (status != NC_OK) {
+        goto error;
+    }
+
+    status = stats_pool_map(&st->sum, server_pool);
+    if (status != NC_OK) {
+        goto error;
+    }
+
+    status = stats_create_buf(st);
+    if (status != NC_OK) {
+        goto error;
+    }
+
+    //status = stats_start_aggregator(st);
+    //if (status != NC_OK) {
+    //    goto error;
+    //}
+
+    return st;
+
+error:
+	st->sd = -1;
+    stats_destroy(st);
+    return NULL;
+}
+
+rstatus_t
+stats_recreate_buf(struct stats *st)
+{
+    uint32_t int64_max_digits = 20; /* INT64_MAX = 9223372036854775807 */
+    uint32_t key_value_extra = 8;   /* "key": "value", */
+    uint32_t pool_extra = 8;        /* '"pool_name": { ' + ' }' */
+    uint32_t server_extra = 8;      /* '"server_name": { ' + ' }' */
+    size_t size = 0;
+    uint32_t i;
+
+    ASSERT(st->buf.data != NULL && st->buf.size != 0);
+
+	stats_destroy_buf(st);
+
+    /* header */
+    size += 1;
+
+    size += st->service_str.len;
+    size += st->service.len;
+    size += key_value_extra;
+
+    size += st->source_str.len;
+    size += st->source.len;
+    size += key_value_extra;
+
+    size += st->version_str.len;
+    size += st->version.len;
+    size += key_value_extra;
+
+    size += st->uptime_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+    size += st->timestamp_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+    size += st->ntotal_conn_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+    size += st->ncurr_conn_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+	size += st->ncurr_conn_str_a.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	size += st->ntotal_msg_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->nfree_msg_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->ntotal_mbuf_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->nfree_mbuf_str.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+	size += st->ntotal_msg_str_proxy_adm.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->nfree_msg_str_proxy_adm.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->ntotal_mbuf_str_proxy_adm.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+
+	size += st->nfree_mbuf_str_proxy_adm.len;
+    size += int64_max_digits;
+    size += key_value_extra;
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
+    /* server pools */
+    for (i = 0; i < array_n(&st->sum); i++) {
+        struct stats_pool *stp = array_get(&st->sum, i);
+        uint32_t j;
+
+        size += stp->name.len;
+        size += pool_extra;
+
+        for (j = 0; j < array_n(&stp->metric); j++) {
+            struct stats_metric *stm = array_get(&stp->metric, j);
+
+            size += stm->name.len;
+            size += int64_max_digits;
+            size += key_value_extra;
+        }
+
+        /* servers per pool */
+        for (j = 0; j < array_n(&stp->server); j++) {
+            struct stats_server *sts = array_get(&stp->server, j);
+            uint32_t k;
+
+            size += sts->name.len;
+            size += server_extra;
+
+            for (k = 0; k < array_n(&sts->metric); k++) {
+                struct stats_metric *stm = array_get(&sts->metric, k);
+
+                size += stm->name.len;
+                size += int64_max_digits;
+                size += key_value_extra;
+            }
+        }
+    }
+
+    /* footer */
+    size += 2;
+
+    size = NC_ALIGN(size, NC_ALIGNMENT);
+
+    st->buf.data = nc_alloc(size);
+    if (st->buf.data == NULL) {
+        log_error("create stats buffer of size %zu failed: %s", size,
+                   strerror(errno));
+        return NC_ENOMEM;
+    }
+    st->buf.size = size;
+
+    log_debug(LOG_DEBUG, "stats buffer size %zu", size);
+
+	stats_make_rsp(st);
+
+    return NC_OK;
+}
+
+rstatus_t
+stats_recreate(struct context *ctx, struct array *server_pool)
+{
+    rstatus_t status;
+	uint32_t i, j, nsp, nser;
+	int64_t count = 0;
+	struct server_pool *sp;
+	struct array *servers;
+	struct server *ser;
+	struct conn *conn_s;
+    struct stats *st;
+	struct stats_buffer *st_b;
+
+	st = ctx->stats;
+
+    ASSERT(st != NULL);
+
+    st->start_ts = (int64_t)time(NULL);
+
+    st->updated = 0;
+    st->aggregate = 0;
+
+	stats_pool_unmap(&st->sum);
+    stats_pool_unmap(&st->shadow);
+    stats_pool_unmap(&st->current);
+
+    /* map server pool to current (a), shadow (b) and sum (c) */
+
+    status = stats_pool_map(&st->current, server_pool);
+    if (status != NC_OK) {
+        goto error;
+    }
+
+    status = stats_pool_map(&st->shadow, server_pool);
+    if (status != NC_OK) {
+        goto error;
+    }
+
+    status = stats_pool_map(&st->sum, server_pool);
+    if (status != NC_OK) {
+        goto error;
+    }
+
+	//add exits stats
+	for (i = 0, nsp = array_n(server_pool); i < nsp; i++)
+	{
+		sp = array_get(server_pool, i);
+		log_debug(LOG_DEBUG, "server_pool(%s)'s client_connections : %d",
+			sp->name.data, sp->nc_conn_q);
+		stats_pool_incr_by_anyway(ctx, sp, client_connections, sp->nc_conn_q);
+		servers = &(sp->server);
+		for(j = 0, nser = array_n(servers); j <nser; j++)
+		{
+			ser = array_get(servers, j);
+			log_debug(LOG_DEBUG, "server(%s)'s connections : %d", 
+				ser->name.data, ser->ns_conn_q);
+			count = 0;
+			TAILQ_FOREACH(conn_s, &ser->s_conn_q, conn_tqe)
+			{
+				ASSERT(conn_s != NULL);
+				if(conn_s->connected)
+				{
+					count ++;
+				}
+			}
+			stats_server_incr_by_anyway(ctx, ser, server_connections, count);
+		}
+		
+	}
+
+    return NC_OK;
+
+error:
+    //stats_destroy(st);
+    return status;
+}
+
+#endif //shenzheng 2015-5-14 config-reload
+

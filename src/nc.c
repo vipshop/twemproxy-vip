@@ -45,6 +45,32 @@
 #define NC_MBUF_MIN_SIZE    MBUF_MIN_SIZE
 #define NC_MBUF_MAX_SIZE    MBUF_MAX_SIZE
 
+#if 1 //shenzheng 2015-1-26 log rotating
+#define NC_LOG_ROTATE_DEFAULT			LOG_ROTATE_DEFAULT
+
+#define NC_LOG_FILE_MAX_SIZE_DEFAULT	LOG_FILE_MAX_SIZE_DEFAULT
+#define NC_LOG_FILE_MAX_SIZE_MIN		LOG_FILE_MAX_SIZE_MIN
+#define NC_LOG_FILE_MAX_SIZE_MAX		LOG_FILE_MAX_SIZE_MAX
+
+#define NC_LOG_FILE_COUNT_DEFAULT		LOG_FILE_COUNT_DEFAULT
+#define NC_LOG_FILE_COUNT_MIN			LOG_FILE_COUNT_MIN
+#define NC_LOG_FILE_COUNT_MAX			LOG_FILE_COUNT_MAX
+#endif //shenzheng 2015-1-26 log rotating
+
+#if 1 //shenzheng 2015-4-28 proxy administer
+#define NC_PROXY_ADM_PORT       PROXY_ADM_PORT
+#define NC_PROXY_ADM_ADDR       PROXY_ADM_ADDR
+#endif //shenzheng 2015-4-28 proxy administer
+
+#if 1 //shenzheng 2015-6-8 zookeeper
+#ifdef NC_ZOOKEEPER
+#define NC_ZOOKEEPER_START_DEFAULT      ZOOKEEPER_START_DEFAULT
+#define NC_ZOOKEEPER_KEEP_DEFAULT       ZOOKEEPER_KEEP_DEFAULT
+#define NC_ZOOKEEPER_ADDR       		ZOOKEEPER_ADDR
+#define NC_ZOOKEEPER_PATH       		ZOOKEEPER_PATH
+#endif
+#endif //shenzheng 2015-6-8 zookeeper
+
 static int show_help;
 static int show_version;
 static int test_conf;
@@ -52,23 +78,52 @@ static int daemonize;
 static int describe_stats;
 
 static struct option long_options[] = {
-    { "help",           no_argument,        NULL,   'h' },
-    { "version",        no_argument,        NULL,   'V' },
-    { "test-conf",      no_argument,        NULL,   't' },
-    { "daemonize",      no_argument,        NULL,   'd' },
-    { "describe-stats", no_argument,        NULL,   'D' },
-    { "verbose",        required_argument,  NULL,   'v' },
-    { "output",         required_argument,  NULL,   'o' },
-    { "conf-file",      required_argument,  NULL,   'c' },
-    { "stats-port",     required_argument,  NULL,   's' },
-    { "stats-interval", required_argument,  NULL,   'i' },
-    { "stats-addr",     required_argument,  NULL,   'a' },
-    { "pid-file",       required_argument,  NULL,   'p' },
-    { "mbuf-size",      required_argument,  NULL,   'm' },
-    { NULL,             0,                  NULL,    0  }
+    { "help",           	no_argument,        NULL,   'h' },
+    { "version",        	no_argument,        NULL,   'V' },
+    { "test-conf",      	no_argument,        NULL,   't' },
+    { "daemonize",      	no_argument,        NULL,   'd' },
+    { "describe-stats", 	no_argument,        NULL,   'D' },
+    { "verbose",        	required_argument,  NULL,   'v' },
+    { "output",         	required_argument,  NULL,   'o' },
+    { "conf-file",      	required_argument,  NULL,   'c' },
+    { "stats-port",     	required_argument,  NULL,   's' },
+    { "stats-interval", 	required_argument,  NULL,   'i' },
+    { "stats-addr",     	required_argument,  NULL,   'a' },
+    { "pid-file",       	required_argument,  NULL,   'p' },
+    { "mbuf-size",      	required_argument,  NULL,   'm' },
+#if 1 //shenzheng 2015-1-26 log rotating
+	{ "log-rorate",     	no_argument,  		NULL,   'R' },
+	{ "log-file-max-size",  required_argument,  NULL,   'M' },
+	{ "log-file-count",     required_argument,  NULL,   'C' },
+#endif //shenzheng 2015-1-26 log rotating
+#if 1 //shenzheng 2015-4-28 proxy administer
+	{ "proxy-adm-addr",     required_argument,  NULL,   'A' },
+	{ "proxy-adm-port",     required_argument,  NULL,   'P' },
+#endif //shenzheng 2015-4-28 proxy administer
+#if 1 //shenzheng 2015-6-8 zookeeper
+#ifdef NC_ZOOKEEPER
+	{ "zk-start",     		no_argument,  		NULL,   'S' },
+	{ "zk-keep",     		no_argument,  		NULL,   'K' },
+	{ "zk-server",     		required_argument,  NULL,   'z' },
+	{ "zk-path",     		required_argument,  NULL,   'Z' },
+#endif
+#endif //shenzheng 2015-6-8 zookeeper
+    { NULL,             	0,                  NULL,    0  }
 };
 
+#if 1 //shenzheng 2015-1-26 log rotating && proxy administer && zookeeper
+#if 1 //shenzheng 2015-6-18 zookeeper
+#ifdef NC_ZOOKEEPER
+static char short_options[] = "hVtdDv:o:c:s:i:a:p:m:RM:C:A:P:z:Z:SK";
+#else
+static char short_options[] = "hVtdDv:o:c:s:i:a:p:m:RM:C:A:P:";
+#endif
+#else //shenzheng 2015-6-18 zookeeper
+static char short_options[] = "hVtdDv:o:c:s:i:a:p:m:RM:C:A:P:z:Z:SK";
+#endif
+#else
 static char short_options[] = "hVtdDv:o:c:s:i:a:p:m:";
+#endif //shenzheng 2015-4-28 log rotating && proxy administer && zookeeper
 
 static rstatus_t
 nc_daemonize(int dump_core)
@@ -208,27 +263,67 @@ nc_show_usage(void)
         "");
     log_stderr(
         "Options:" CRLF
-        "  -h, --help             : this help" CRLF
-        "  -V, --version          : show version and exit" CRLF
-        "  -t, --test-conf        : test configuration for syntax errors and exit" CRLF
-        "  -d, --daemonize        : run as a daemon" CRLF
-        "  -D, --describe-stats   : print stats description and exit");
+        "  -h, --help                : this help" CRLF
+        "  -V, --version             : show version and exit" CRLF
+        "  -t, --test-conf           : test configuration for syntax errors and exit" CRLF
+        "  -d, --daemonize           : run as a daemon" CRLF
+        "  -D, --describe-stats      : print stats description and exit");
     log_stderr(
-        "  -v, --verbosity=N      : set logging level (default: %d, min: %d, max: %d)" CRLF
-        "  -o, --output=S         : set logging file (default: %s)" CRLF
-        "  -c, --conf-file=S      : set configuration file (default: %s)" CRLF
-        "  -s, --stats-port=N     : set stats monitoring port (default: %d)" CRLF
-        "  -a, --stats-addr=S     : set stats monitoring ip (default: %s)" CRLF
-        "  -i, --stats-interval=N : set stats aggregation interval in msec (default: %d msec)" CRLF
-        "  -p, --pid-file=S       : set pid file (default: %s)" CRLF
-        "  -m, --mbuf-size=N      : set size of mbuf chunk in bytes (default: %d bytes)" CRLF
+        "  -v, --verbosity=N         : set logging level (default: %d, min: %d, max: %d)" CRLF
+        "  -o, --output=S            : set logging file (default: %s)" CRLF
+        "  -c, --conf-file=S         : set configuration file (default: %s)" CRLF
+        "  -s, --stats-port=N        : set stats monitoring port (default: %d)" CRLF
+        "  -a, --stats-addr=S        : set stats monitoring ip (default: %s)" CRLF
+        "  -i, --stats-interval=N    : set stats aggregation interval in msec (default: %d msec)" CRLF
+        "  -p, --pid-file=S          : set pid file (default: %s)" CRLF
+        "  -m, --mbuf-size=N         : set size of mbuf chunk in bytes (default: %d bytes)" CRLF
         "",
         NC_LOG_DEFAULT, NC_LOG_MIN, NC_LOG_MAX,
         NC_LOG_PATH != NULL ? NC_LOG_PATH : "stderr",
         NC_CONF_PATH,
         NC_STATS_PORT, NC_STATS_ADDR, NC_STATS_INTERVAL,
         NC_PID_FILE != NULL ? NC_PID_FILE : "off",
-        NC_MBUF_SIZE);
+        NC_MBUF_SIZE
+		);
+
+#if 1 //shenzheng 2015-1-26 log rotating
+		log_stderr(
+		"  -R, --log-rorate          : enable log rorate" CRLF
+		"  -M, --log-file-max-size=N : set max size per log file if log-rorate open (default: %ld bytes, min: %d bytes, max: %ld bytes)" CRLF
+        "  -C, --log-file-count=N    : set total count of log files to leave if log-rorate open (default: %d, min: %d, max: %d)"
+		"",
+		NC_LOG_FILE_MAX_SIZE_DEFAULT, NC_LOG_FILE_MAX_SIZE_MIN, NC_LOG_FILE_MAX_SIZE_MAX,
+        NC_LOG_FILE_COUNT_DEFAULT, NC_LOG_FILE_COUNT_MIN, NC_LOG_FILE_COUNT_MAX
+		);
+#endif //shenzheng 2015-1-26 log rotating
+
+#if 1 //shenzheng 2015-4-28 proxy administer
+		log_stderr(
+		"  -A, --proxy-adm-addr=S    : set proxy administer monitoring ip (default: %s)" CRLF
+        "  -P, --proxy-adm-port=N    : set proxy administer monitoring port (default: %d, means disabled)"
+        "",
+        NC_PROXY_ADM_ADDR, NC_PROXY_ADM_PORT
+		);
+#endif //shenzheng 2015-4-28 proxy administer
+
+#if 1 //shenzheng 2015-6-8 zookeeper
+#ifdef NC_ZOOKEEPER
+		log_stderr(
+		"  -S, --zk-start            : set configuration from zookeeper" CRLF
+        "  -K, --zk-keep             : set configuration keep with zookeeper" CRLF
+        "  -z, --zk-server=S         : set zookeeper servers address (default: %s)" CRLF
+        "  -Z, --zk-path=S           : set zookeeper configuration path (default: %s)"
+        "",
+        NC_ZOOKEEPER_ADDR, NC_ZOOKEEPER_PATH
+		);
+#endif
+#endif //shenzheng 2015-6-8 zookeeper
+
+#if 1 //shenzheng 2015-6-8 common
+		log_stderr("");
+#endif //shenzheng 2015-6-8 common
+
+
 }
 
 static rstatus_t
@@ -300,6 +395,26 @@ nc_set_default_options(struct instance *nci)
     nci->pid = (pid_t)-1;
     nci->pid_filename = NULL;
     nci->pidfile = 0;
+#if 1 //shenzheng 2015-1-26 log rotating
+	LOG_RORATE = LOG_ROTATE_DEFAULT;
+	LOG_FIEL_MAX_SIZE_FOR_ROTATING = NC_LOG_FILE_MAX_SIZE_DEFAULT;
+	LOG_FILE_COUNT_TO_STAY = NC_LOG_FILE_COUNT_DEFAULT;
+#endif //shenzheng 2015-1-26 log rotating
+
+#if 1 //shenzheng 2015-4-28 proxy administer
+	nci->proxy_adm_addr = NC_PROXY_ADM_ADDR;
+	nci->proxy_adm_port = NC_PROXY_ADM_PORT;
+#endif //shenzheng 2015-4-28 proxy administer
+
+#if 1 //shenzheng 2015-6-9 zookeeper
+#ifdef NC_ZOOKEEPER
+	nci->zk_start = NC_ZOOKEEPER_START_DEFAULT;
+	nci->zk_keep = NC_ZOOKEEPER_KEEP_DEFAULT;
+	nci->zk_servers = NC_ZOOKEEPER_ADDR;
+	nci->zk_path = NC_ZOOKEEPER_PATH;
+#endif
+#endif //shenzheng 2015-6-9 zookeeper
+
 }
 
 static rstatus_t
@@ -405,6 +520,77 @@ nc_get_options(int argc, char **argv, struct instance *nci)
             nci->mbuf_chunk_size = (size_t)value;
             break;
 
+#if 1 //shenzheng 2015-1-26 log rotating
+		case 'R':
+			LOG_RORATE = 1;
+			break;
+		case 'M':
+		{
+			char *result;
+			result = set_log_file_max_size(optarg);
+			if(result != NULL)
+			{
+				log_stderr("nutcracker: %s", result);
+				nc_free(result);
+				return NC_ERROR;
+			}
+			break;
+		}
+		case 'C':
+		{
+			char *result;
+			result = set_log_file_count(optarg);
+			if(result != NULL)
+			{
+				log_stderr("nutcracker: %s", result);
+				nc_free(result);
+				return NC_ERROR;
+			}
+			break;
+		}
+#endif //shenzheng 2015-1-26 log rotating
+
+#if 1 //shenzheng 2015-4-28 proxy administer
+		case 'A':
+            nci->proxy_adm_addr = optarg;
+            break;
+
+		case 'P':
+            value = nc_atoi(optarg, strlen(optarg));
+            if (value < 0) {
+                log_stderr("nutcracker: option -S requires a number");
+                return NC_ERROR;
+            }
+            if (!nc_valid_port(value)) {
+                log_stderr("nutcracker: option -S value %d is not a valid "
+                           "port", value);
+                return NC_ERROR;
+            }
+
+            nci->proxy_adm_port = (uint16_t)value;
+            break;
+#endif //shenzheng 2015-4-28 proxy administer
+
+#if 1 //shenzheng 2015-6-8 zookeeper
+#ifdef NC_ZOOKEEPER
+		case 'z':
+			nci->zk_servers = optarg;
+			break;
+
+		case 'Z':
+			nci->zk_path = optarg;
+			break;
+
+		case 'S':
+			nci->zk_start = 1;
+			break;
+
+		case 'K':
+			nci->zk_keep = 1;
+			break;
+#endif
+#endif //shenzheng 2015-6-8 zookeeper
+
         case '?':
             switch (optopt) {
             case 'o':
@@ -424,6 +610,36 @@ nc_get_options(int argc, char **argv, struct instance *nci)
             case 'a':
                 log_stderr("nutcracker: option -%c requires a string", optopt);
                 break;
+
+#if 1 //shenzheng 2015-1-27 log rotating
+			case 'M':
+				log_stderr("nutcracker: option -%c requires a file size", optopt);
+				break;
+			case 'C':
+				log_stderr("nutcracker: option -%c requires a number", optopt);
+				break;
+#endif //shenzheng 2015-1-27 log rotating
+
+#if 1 //shenzheng 2015-4-28 proxy administer
+			case 'A':
+				log_stderr("nutcracker: option -%c requires a string", optopt);
+				break;
+			case 'P':
+				log_stderr("nutcracker: option -%c requires a number", optopt);
+				break;
+#endif //shenzheng 2015-4-28 proxy administer
+
+#if 1 //shenzheng 2015-6-8 zookeeper
+#ifdef NC_ZOOKEEPER	
+			case 'z':
+				log_stderr("nutcracker: option -%c requires a string", optopt);
+				break;
+	
+			case 'Z':
+				log_stderr("nutcracker: option -%c requires a string", optopt);
+				break;
+#endif
+#endif //shenzheng 2015-6-8 zookeeper
 
             default:
                 log_stderr("nutcracker: invalid option -- '%c'", optopt);

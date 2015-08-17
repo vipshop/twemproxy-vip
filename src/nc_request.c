@@ -88,7 +88,11 @@ req_log(struct msg *req)
 
     req_type = msg_type_string(req->type);
 
-    log_debug(LOG_NOTICE, "req %"PRIu64" done on c %d req_time %"PRIi64".%03"PRIi64
+#if 1 //shenzheng 2014-9-2 comman
+	log_debug(LOG_VERB, "req %"PRIu64" done on c %d req_time %"PRIi64".%03"PRIi64
+#else //shenzheng 2014-9-2 comman
+	 log_debug(LOG_NOTICE, "req %"PRIu64" done on c %d req_time %"PRIi64".%03"PRIi64
+#endif //shenzheng 2014-9-2 comman
               " msec type %.*s narg %"PRIu32" req_len %"PRIu32" rsp_len %"PRIu32
               " key0 '%s' peer '%s' done %d error %d",
               req->id, req->owner->sd, req_time / 1000, req_time % 1000,
@@ -103,7 +107,7 @@ req_put(struct msg *msg)
 
     ASSERT(msg->request);
 
-    req_log(msg);
+	req_log(msg);
 
     pmsg = msg->peer;
     if (pmsg != NULL) {
@@ -112,7 +116,7 @@ req_put(struct msg *msg)
         pmsg->peer = NULL;
         rsp_put(pmsg);
     }
-
+	
     msg_tmo_delete(msg);
 
     msg_put(msg);
@@ -222,6 +226,10 @@ req_error(struct conn *conn, struct msg *msg)
     struct msg *cmsg; /* current message */
     uint64_t id;
     uint32_t nfragment;
+	
+#if 1 //shenzheng 2015-3-2 common
+	msg_print(msg, LOG_DEBUG);
+#endif //shenzheng 2015-3-2 common
 
     ASSERT(msg->request && req_done(conn, msg));
 
@@ -422,7 +430,7 @@ req_recv_next(struct context *ctx, struct conn *conn, bool alloc)
     if (msg != NULL) {
         conn->rmsg = msg;
     }
-
+	
     return msg;
 }
 
@@ -446,6 +454,201 @@ req_make_reply(struct context *ctx, struct conn *conn, struct msg *req)
     return NC_OK;
 }
 
+#if 1 //shenzheng 2014-9-3 replace server
+static int 
+server_pname_compare(struct string * pname, struct string * ser_addr)
+{
+	uint32_t pos;
+	bool equal_flag = true;
+
+	if(pname->len <= ser_addr->len)
+	{
+		return -1;
+	}
+	
+	for(pos = 0; pos < ser_addr->len; pos ++)
+	{
+		if(*(pname->data + pos) != *(ser_addr->data + pos))
+		{
+			equal_flag = false;
+			break;
+		}
+	}
+
+	if(equal_flag == false)
+	{
+		return -1;
+	}
+
+	if(':' != *(pname->data + pos))
+	{
+		return -1;
+	}
+	
+	return 0;
+}
+
+static rstatus_t
+req_examine_replace_server(struct context *ctx, struct conn *conn, struct msg *msg)
+{
+	rstatus_t status;
+	uint32_t i, nelem;
+	bool find_flag = false;
+	char *content = NULL;
+	struct server_pool *pool;
+	struct server *ser;
+	struct keypos *kp;
+	struct string old_ser_addr, new_ser_addr;
+	struct string old_ser_host, new_ser_host;
+	struct string old_ser_port_str, new_ser_port_str;
+	int old_ser_port, new_ser_port;
+	uint8_t *p, *q, *last;
+
+	log_debug(LOG_DEBUG, "array_n(msg->keys) : %d", array_n(msg->keys));
+
+	msg->conf_version_curr = ctx->conf_version;
+
+	if(array_n(msg->keys) != 2)
+	{
+		content = "-command args error!(example : "
+			"replace_server old_ip:old_port new_ip:new_port) \r\n";
+		goto error;
+	}
+	
+	pool = conn->owner;
+
+	kp = array_get(msg->keys, 0);
+	old_ser_addr.data = kp->start;
+	old_ser_addr.len = (uint32_t)(kp->end - kp->start);
+	log_debug(LOG_DEBUG, "old_ser_addr.len : %d", old_ser_addr.len);
+	log_debug(LOG_DEBUG, "old_ser_addr.data : %.*s", old_ser_addr.len, old_ser_addr.data);
+
+	kp = array_get(msg->keys, 1);
+	new_ser_addr.data = kp->start;
+	new_ser_addr.len = (uint32_t)(kp->end - kp->start);
+	log_debug(LOG_DEBUG, "new_ser_addr.len : %d", new_ser_addr.len);
+	log_debug(LOG_DEBUG, "new_ser_addr.data : %.*s", new_ser_addr.len, new_ser_addr.data);
+	
+	ASSERT(old_ser_addr.len > 0 && new_ser_addr.len > 0);
+
+
+	p = old_ser_addr.data;
+	last = old_ser_addr.data + old_ser_addr.len;
+
+	q = nc_strchr(p, last, ':');
+	if(q == NULL || q >= last || q <= old_ser_addr.data)
+	{
+		content = "-first args error!(example : "
+			"replace_server old_ip:old_port new_ip:new_port) \r\n";
+		goto error;
+	}
+	p = q + 1;
+	if(nc_strchr(p, last, ':') != NULL)
+	{
+		content = "-first args error!(example : "
+			"replace_server old_ip:old_port new_ip:new_port) \r\n";
+		goto error;
+	}
+
+	old_ser_host.data = old_ser_addr.data;
+	old_ser_host.len = (uint32_t)(q - old_ser_addr.data);
+	log_debug(LOG_DEBUG, "old_ser_host: %.*s", old_ser_host.len, old_ser_host.data);
+
+	old_ser_port_str.data = q + 1;
+	old_ser_port_str.len = (uint32_t)(last - old_ser_port_str.data);
+	log_debug(LOG_DEBUG, "old_ser_port_str: %.*s", old_ser_port_str.len, old_ser_port_str.data);
+
+	old_ser_port = nc_atoi(old_ser_port_str.data, old_ser_port_str.len);	
+	log_debug(LOG_DEBUG, "old_ser_port: %d", old_ser_port);
+	
+	if(nc_valid_port(old_ser_port) == false)
+	{
+		content = "-the port in first args invalid!(example : "
+			"replace_server old_ip:old_port new_ip:new_port) \r\n";
+		goto error;
+	}
+	
+	
+	p = new_ser_addr.data;
+	last = new_ser_addr.data + new_ser_addr.len;
+
+	q = nc_strchr(p, last, ':');
+	if(q == NULL || q >= last)
+	{
+		goto error;
+	}
+	p = q + 1;
+	if(nc_strchr(p, last, ':') != NULL)
+	{
+		content = "-first args error!(example : "
+			"replace_server old_ip:old_port new_ip:new_port) \r\n";
+		goto error;
+	}
+
+	new_ser_host.data = new_ser_addr.data;
+	new_ser_host.len = (uint32_t)(q - new_ser_addr.data);
+
+	new_ser_port_str.data = q + 1;
+	new_ser_port_str.len = (uint32_t)(last - new_ser_port_str.data);
+
+	new_ser_port = nc_atoi(new_ser_port_str.data, new_ser_port_str.len);
+	if(nc_valid_port(new_ser_port) == false)
+	{
+		content = "-the port in second args invalid!(example : "
+			"replace_server old_ip:old_port new_ip:new_port) \r\n";
+		goto error;
+	}
+	
+	log_debug(LOG_DEBUG, "new_ser_host: %.*s", new_ser_host.len, new_ser_host.data);
+	log_debug(LOG_DEBUG, "new_ser_port_str: %.*s", new_ser_port_str.len, new_ser_port_str.data);
+	log_debug(LOG_DEBUG, "new_ser_port: %d", new_ser_port);	
+	
+	for (i = 0, nelem = array_n(&pool->server); i < nelem; i++) 
+	{
+		ser = array_get(&pool->server, i);
+		if(0 == server_pname_compare(&ser->pname, &old_ser_addr))
+		{
+			log_debug(LOG_DEBUG, "target server idx is %d", ser->idx);
+			msg->mser_idx = ser->idx;
+			find_flag = true;
+			break;
+		}
+	}
+	
+	if(find_flag == false)
+	{
+		content = "-the modifid server is not in the current server pool!\r\n";
+		goto error;
+	}
+
+	return NC_OK;
+
+error:
+
+	msg->replace_server = 0;
+	status = req_make_reply(ctx, conn, msg);
+	if (status != NC_OK) {
+		conn->err = errno;
+		return status;
+	}
+
+	status = msg_append(msg->peer, (uint8_t *)content, (size_t)strlen(content));
+	if (status != NC_OK) {
+		conn->err = errno;
+		return status;
+	}
+
+	status = event_add_out(ctx->evb, conn);
+	if (status != NC_OK) {
+		conn->err = errno;
+		return status;
+	}
+
+	return NC_ERROR;
+}
+
+#endif //shenzheng 2015-6-24 replace server
+
 static bool
 req_filter(struct context *ctx, struct conn *conn, struct msg *msg)
 {
@@ -464,7 +667,7 @@ req_filter(struct context *ctx, struct conn *conn, struct msg *msg)
      * passive close
      */
     if (msg->quit) {
-        ASSERT(conn->rmsg == NULL);
+        //ASSERT(conn->rmsg == NULL);
         log_debug(LOG_INFO, "filter quit req %"PRIu64" from c %d", msg->id,
                   conn->sd);
         conn->eof = 1;
@@ -481,6 +684,16 @@ req_filter(struct context *ctx, struct conn *conn, struct msg *msg)
     if (conn->need_auth) {
         msg->noforward = 1;
     }
+	
+#if 1 //shenzheng 2015-6-23 replace server
+	if(msg->replace_server)
+	{
+		if(req_examine_replace_server(ctx, conn, msg) != NC_OK)
+		{
+			return true;
+		}		
+	}
+#endif //shenzheng 2015-6-23 replace server
 
     return false;
 }
@@ -541,13 +754,58 @@ req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg)
     }
 
     pool = c_conn->owner;
-
     ASSERT(array_n(msg->keys) > 0);
     kpos = array_get(msg->keys, 0);
     key = kpos->start;
     keylen = (uint32_t)(kpos->end - kpos->start);
 
+#if 1 //shenzheng 2015-6-24 replace server
+	if(1 == msg->replace_server)
+	{
+		ASSERT(msg->conf_version_curr == ctx->conf_version);
+	
+		log_debug(LOG_DEBUG, "msg->mser_idx : %d", msg->mser_idx);
+		log_debug(LOG_DEBUG, "array_n(&pool->server) : %d", array_n(&pool->server));
+		if(array_n(&pool->server) <= msg->mser_idx)
+		{
+			s_conn = NULL; 
+		}
+		else
+		{
+			s_conn = server_pool_conn_for_replace(ctx, c_conn->owner, msg);
+			if(s_conn != NULL)
+			{
+				struct mbuf *mbuf;
+				char *content = NULL;
+				
+				while(!STAILQ_EMPTY(&msg->mhdr))
+				{
+					mbuf = STAILQ_FIRST(&msg->mhdr);
+					mbuf_remove(&msg->mhdr, mbuf);
+					mbuf_put(mbuf);
+				}
+				msg->mlen = 0;
+				content = "*1\r\n$4\r\nping\r\n";
+				status = msg_append(msg, (uint8_t *)content, (size_t)strlen(content));
+				if(status != NC_OK)
+				{
+					struct server *ser;
+					ser = s_conn->owner;
+					server_close(ctx, s_conn);
+					s_conn = NULL;
+					server_close_for_replace_server(ser);
+				}
+			}
+		}
+	}
+	else
+	{
+#endif //shenzheng 2015-6-24 replace server
     s_conn = server_pool_conn(ctx, c_conn->owner, key, keylen);
+#if 1 //shenzheng 2015-6-24 replace server
+	}
+#endif //shenzheng 2015-6-24 replace server
+
     if (s_conn == NULL) {
         req_forward_error(ctx, c_conn, msg);
         return;
@@ -628,17 +886,22 @@ req_recv_done(struct context *ctx, struct conn *conn, struct msg *msg,
 
     /* do fragment */
     pool = conn->owner;
+	
     TAILQ_INIT(&frag_msgq);
     status = msg->fragment(msg, pool->ncontinuum, &frag_msgq);
     if (status != NC_OK) {
         if (!msg->noreply) {
             conn->enqueue_outq(ctx, conn, msg);
         }
+#if 1 //shenzheng 2015-3-2 common
+		log_debug(LOG_DEBUG, "fragment error");
+#endif //shenzheng 2015-3-2 common
         req_forward_error(ctx, conn, msg);
     }
 
     /* if no fragment happened */
     if (TAILQ_EMPTY(&frag_msgq)) {
+
         req_forward(ctx, conn, msg);
         return;
     }
@@ -696,6 +959,10 @@ req_send_next(struct context *ctx, struct conn *conn)
     if (nmsg == NULL) {
         return NULL;
     }
+	
+#if 1 //shenzheng 2015-3-2 common
+	msg_print(nmsg, LOG_DEBUG);
+#endif //shenzheng 2015-3-2 common
 
     ASSERT(nmsg->request && !nmsg->done);
 
@@ -730,3 +997,167 @@ req_send_done(struct context *ctx, struct conn *conn, struct msg *msg)
         req_put(msg);
     }
 }
+
+#if 1 //shenzheng 2015-4-28 proxy administer
+void
+req_put_proxy_adm(struct msg *msg)
+{
+    struct msg *pmsg; /* peer message (response) */
+
+    ASSERT(msg->request);
+
+	pmsg = msg->peer;
+    if (pmsg != NULL) {
+        ASSERT(!pmsg->request && pmsg->peer == msg);
+        msg->peer = NULL;
+        pmsg->peer = NULL;
+        
+		ASSERT(!pmsg->request);
+	    ASSERT(pmsg->peer == NULL);
+	    msg_put_proxy_adm(pmsg);
+    }
+
+    msg_put_proxy_adm(msg);
+}
+
+
+static bool
+proxy_adm_req_filter(struct context *ctx, struct conn *conn, struct msg *msg)
+{
+    ASSERT(conn->client && !conn->proxy);
+
+    if (msg_empty(msg)) {
+        ASSERT(conn->rmsg == NULL);
+        log_debug(LOG_VERB, "filter empty req %"PRIu64" from c %d", msg->id,
+                  conn->sd);
+        req_put_proxy_adm(msg);
+        return true;
+    }
+
+    /*
+     * Handle "quit\r\n", which is the protocol way of doing a
+     * passive close
+     */
+    if (msg->quit) {
+        log_debug(LOG_INFO, "filter quit req %"PRIu64" from c %d", msg->id,
+                  conn->sd);
+        conn->eof = 1;
+        conn->recv_ready = 0;
+        req_put_proxy_adm(msg);
+        return true;
+    }
+
+    return false;
+}
+
+struct msg *
+req_recv_next_proxy_adm(struct context *ctx, struct conn *conn, bool alloc)
+{
+    struct msg *msg;
+
+    ASSERT(conn->client && !conn->proxy);
+	
+    if (conn->eof) {
+        msg = conn->rmsg;
+
+        /* client sent eof before sending the entire request */
+        if (msg != NULL) {
+            conn->rmsg = NULL;
+
+            ASSERT(msg->peer == NULL);
+            ASSERT(msg->request && !msg->done);
+
+            log_error("eof c %d discarding incomplete req %"PRIu64" len "
+                      "%"PRIu32"", conn->sd, msg->id, msg->mlen);
+
+            req_put_proxy_adm(msg);
+        }
+
+        /*
+         * TCP half-close enables the client to terminate its half of the
+         * connection (i.e. the client no longer sends data), but it still
+         * is able to receive data from the proxy. The proxy closes its
+         * half (by sending the second FIN) when the client has no
+         * outstanding requests
+         */
+        if (!conn->active(conn)) {
+            conn->done = 1;
+            log_debug(LOG_INFO, "c %d is done", conn->sd);
+        }
+        return NULL;
+    }
+
+    msg = conn->rmsg;
+    if (msg != NULL) {
+        ASSERT(msg->request);
+        return msg;
+    }
+
+    if (!alloc) {
+        return NULL;
+    }
+
+    msg = msg_get_proxy_adm(conn, true);
+    if (msg != NULL) {
+        conn->rmsg = msg;
+    }
+	else
+	{
+		conn->err = errno;
+	}
+	
+    return msg;
+}
+
+void
+req_recv_done_proxy_adm(struct context *ctx, struct conn *conn, struct msg *msg,
+              struct msg *nmsg)
+{
+    rstatus_t status;
+	struct proxy_adm *padm;
+	struct msg *res_msg;
+	
+    ASSERT(conn->client && !conn->proxy);
+    ASSERT(msg->request);
+    ASSERT(msg->owner == conn);
+    ASSERT(conn->rmsg == msg);
+	ASSERT(conn->owner == ctx);
+    ASSERT(nmsg == NULL || nmsg->request);
+
+	padm = ctx->padm;
+	ASSERT(padm != NULL);
+
+	msg_print(msg, LOG_DEBUG);
+	
+    /* enqueue next message (request), if any */
+    conn->rmsg = nmsg;
+
+    if (proxy_adm_req_filter(ctx, conn, msg)) {
+        return;
+    }
+
+	
+	res_msg = proxy_adm_make_response(ctx, conn, msg);
+	if(res_msg == NULL)
+	{
+		return;
+	}
+
+	res_msg->peer = msg;
+    msg->peer = res_msg;
+
+    msg->done = 1;
+    conn->enqueue_outq(ctx, conn, msg);
+
+    status = event_add_out(padm->evb, conn);
+    if (status != NC_OK) {
+        conn->err = errno;
+    }
+	
+    //req_forward_error(ctx, conn, msg);
+
+    return;
+}
+
+#endif //shenzheng 2015-4-28 proxy administer
+

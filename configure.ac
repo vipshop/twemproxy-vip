@@ -1,7 +1,7 @@
 # Define the package version numbers and the bug reporting address
 m4_define([NC_MAJOR], 0)
 m4_define([NC_MINOR], 4)
-m4_define([NC_PATCH], 0)
+m4_define([NC_PATCH], 6)
 m4_define([NC_BUGS], [manj@cs.stanford.edu])
 
 # Initialize autoconf
@@ -195,6 +195,33 @@ AS_IF([test "x$disable_stats" = xyes],
   [AC_DEFINE([HAVE_STATS], [1], [Define to 1 if stats is not disabled])])
 AC_MSG_RESULT($disable_stats)
 
+AC_MSG_CHECKING([whether to enable zookeeper])
+AC_ARG_WITH([zookeeper],
+  AS_HELP_STRING([--with-zookeeper@<:@=no|yes|dir@:>@],
+    [support zookeeper(default not support)]),
+  [
+    if test "$withval" = "no"; then
+      enable_zookeeper=no
+    elif test "$withval" = "yes"; then
+      enable_zookeeper=yes
+      ZOOKEEPER_HOME="/usr"
+	elif test "$withval" = ""; then
+      enable_zookeeper=yes
+      ZOOKEEPER_HOME="/usr"
+    else
+	  enable_zookeeper=yes
+      ZOOKEEPER_HOME="$withval"
+    fi
+  ],
+  [enable_zookeeper=no])
+AC_SUBST(ZOOKEEPER_HOME)
+AS_IF([test "x$enable_zookeeper" = xyes],
+  [AC_DEFINE([HAVE_ZOOKEEPER], [1], [Define to 1 if zookeeper is enabled])],
+  [])
+AC_MSG_RESULT($enable_zookeeper)
+
+AM_CONDITIONAL([APP_ZOOKEEPER], [test "x$enable_zookeeper" = "xyes"])
+  
 # Untar the yaml-0.1.4 in contrib/ before config.status is rerun
 AC_CONFIG_COMMANDS_PRE([tar xvfz contrib/yaml-0.1.4.tar.gz -C contrib])
 

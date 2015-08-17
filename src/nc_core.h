@@ -58,10 +58,24 @@
 # define NC_HAVE_BACKTRACE 1
 #endif
 
+#if 1 //shenzheng 2015-6-6 zookeeper
+#ifdef HAVE_ZOOKEEPER
+# define NC_ZOOKEEPER 1
+#endif
+#endif //shenzheng 2015-6-6 zookeeper
+
 #define NC_OK        0
 #define NC_ERROR    -1
 #define NC_EAGAIN   -2
 #define NC_ENOMEM   -3
+
+#if 1 //shenzheng 2014-12-4 common
+/**
+the macro defined below must be a negative number. 
+*/
+#define ERROR_REPLACE_SERVER_TRY_AGAIN -1
+#define ERROR_REPLACE_SERVER_CONF_VERSION_CHANGE -2
+#endif //shenzheng 2014-12-4 common
 
 /* reserved fds for std streams, log, stats fd, epoll etc. */
 #define RESERVED_FDS 32
@@ -118,6 +132,16 @@ struct event_base;
 #include <nc_connection.h>
 #include <nc_server.h>
 
+#if 1 //shenzheng 2015-4-28 proxy administer
+#include <nc_proxy.h>
+#endif //shenzheng 2015-4-28 proxy administer
+
+#if 1 //shenzheng 2015-6-8 zookeeper
+#ifdef NC_ZOOKEEPER
+#include <nc_zookeeper.h>
+#endif
+#endif //shenzheng 2015-6-8 zookeeper
+
 struct context {
     uint32_t           id;          /* unique context id */
     struct conf        *cf;         /* configuration */
@@ -131,6 +155,28 @@ struct context {
     uint32_t           max_nfd;     /* max # files */
     uint32_t           max_ncconn;  /* max # client connections */
     uint32_t           max_nsconn;  /* max # server connections */
+
+#if 1 //shenzheng 2015-4-27 proxy administer
+	struct proxy_adm   *padm;
+#endif //shenzheng 2015-4-27 proxy administer
+
+#if 1 //shenzheng 2015-5-8 config-reload
+	uint8_t			   which_pool:1;	/* 0:ctx->pool ; 1:ctx->pool_swap */
+	struct conf        *cf_swap;    	/* server_pool[] */
+	struct array       pool_swap;    	/* server_pool[] */
+	volatile uint8_t   reload_thread:1; /* 0: proxy_adm thread's right to handle reload; 
+										  * 1: mian thread's right to handle reload */
+	volatile long long conf_version;										  	
+	pthread_mutex_t    reload_lock;
+#endif //shenzheng 2015-7-27 config-reload
+
+#if 1 //shenzheng 2015-6-9 zookeeper
+#ifdef NC_ZOOKEEPER
+	void		   	   *zkhandle;
+	struct string	   watch_path;
+	struct string	   zk_servers;
+#endif
+#endif //shenzheng 2015-6-16 zookeeper
 };
 
 
@@ -147,6 +193,19 @@ struct instance {
     pid_t           pid;                         /* process id */
     char            *pid_filename;               /* pid filename */
     unsigned        pidfile:1;                   /* pid file created? */
+#if 1 //shenzheng 2015-4-28 proxy administer
+	char            *proxy_adm_addr;             /* proxy administer monitoring addr */
+	uint16_t        proxy_adm_port;              /* proxy administer monitoring port */
+#endif //shenzheng 2015-4-28 proxy administer
+
+#if 1 //shenzheng 2015-6-9 zookeeper
+#ifdef NC_ZOOKEEPER
+	uint8_t			zk_start:1;					  /* start from configuration in zookeeper */
+	uint8_t			zk_keep:1;					  /* keep configuration from zookeeper */
+	char			*zk_servers;				  /* zoopeeper servers' address, like 192.168.0.1:2181,192.168.0.2:2181 */
+	char			*zk_path;					  /* configuration path in zookeeper */
+#endif
+#endif //shenzheng 2015-6-9 zookeeper
 };
 
 struct context *core_start(struct instance *nci);

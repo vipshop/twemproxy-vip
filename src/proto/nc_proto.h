@@ -154,4 +154,9 @@ rstatus_t redis_add_auth_packet(struct context *ctx, struct conn *c_conn, struct
 rstatus_t redis_fragment(struct msg *r, uint32_t ncontinuum, struct msg_tqh *frag_msgq);
 rstatus_t redis_reply(struct msg *r);
 
+#if 1 //shenzheng 2015-4-28 proxy administer
+void proxy_adm_parse_req(struct msg *r);
+void proxy_adm_parse_rsp(struct msg *r);
+#endif //shenzheng 2015-4-28 proxy administer
+
 #endif

@@ -335,6 +335,13 @@ memcache_parse_req(struct msg *r)
                 }
                 kpos->start = r->token;
                 kpos->end = p;
+				
+#if 1 //shenzheng 2015-5-12 fix bug: "get " command core dump
+				if(kpos->start == kpos->end)
+				{
+					goto error;
+				}
+#endif //shenzheng 2015-5-12 fix bug: "get " command core dump
 
                 r->narg++;
                 r->token = NULL;
@@ -560,6 +567,14 @@ memcache_parse_req(struct msg *r)
             switch (ch) {
             case ' ':
                 break;
+#if 1 //shenzheng 2015-4-1 support 'delete key 0\r\n'
+			case '0':
+				if(!memcache_delete(r))
+				{
+					goto error;
+				}
+				break;
+#endif //shenzheng 2015-4-1 support 'delete key 0\r\n'
 
             case 'n':
                 if (memcache_storage(r) || memcache_arithmetic(r) || memcache_delete(r)) {
@@ -1132,8 +1147,10 @@ memcache_parse_rsp(struct msg *r)
         if (state <= SW_RUNTO_VAL || state == SW_CRLF || state == SW_ALMOST_DONE) {
             r->state = SW_START;
         }
+
         r->pos = r->token;
         r->token = NULL;
+
         r->result = MSG_PARSE_REPAIR;
     } else {
         r->result = MSG_PARSE_AGAIN;

@@ -112,8 +112,38 @@ struct stats {
     struct string       ntotal_conn_str; /* total connections string */
     struct string       ncurr_conn_str;  /* curr connections string */
 
+#if 1 //shenzheng 2015-7-9 proxy administer
+	struct string       ncurr_conn_str_a;  /* curr connections string for proxy administer */
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-3-23 common
+#ifdef NC_DEBUG_LOG
+	struct string		ntotal_msg_str;	 /* total msgs string */
+	struct string		nfree_msg_str;	 /* free msgs string */
+	struct string		ntotal_mbuf_str; /* total mbufs string */
+	struct string		nfree_mbuf_str;	 /* free mbufs string */	
+#endif
+#endif //shenzheng 2015-3-23 common
+
+#if 1 //shenzheng 2015-7-9 proxy administer
+#ifdef NC_DEBUG_LOG
+	struct string		ntotal_msg_str_proxy_adm;	 /* total msgs string for proxy administer */
+	struct string		nfree_msg_str_proxy_adm;	 /* free msgs string for proxy administer */
+	struct string		ntotal_mbuf_str_proxy_adm; /* total mbufs string for proxy administer */
+	struct string		nfree_mbuf_str_proxy_adm;	 /* free mbufs string for proxy administer */	
+#endif
+#endif //shenzheng 2015-7-9 proxy administer
+
     volatile int        aggregate;       /* shadow (b) aggregate? */
     volatile int        updated;         /* current (a) updated? */
+
+#if 1 //shenzheng 2015-5-14 config-reload
+	volatile uint8_t    reload_thread:1; /* 0: proxy_adm thread's right to handle reload; 
+										    * 1: stats thread's right to handle reload */
+	volatile uint8_t    pause:1;		 /* 0: stats update is running; 1: stats update is pause */
+
+	struct context		*ctx;
+#endif //shenzheng 2015-7-16 config-reload
 };
 
 #define DEFINE_ACTION(_name, _type, _desc) STATS_POOL_##_name,
@@ -172,6 +202,18 @@ typedef enum stats_server_field {
      _stats_server_set_ts(_ctx, _server, STATS_SERVER_##_name, _val);   \
 } while (0)
 
+#if 1 //shenzheng 2015-6-11 config-reload
+
+#define stats_pool_incr_by_anyway(_ctx, _pool, _name, _val) do {               \
+    _stats_pool_incr_by_anyway(_ctx, _pool, STATS_POOL_##_name, _val);         \
+} while (0)
+
+#define stats_server_incr_by_anyway(_ctx, _server, _name, _val) do {           \
+    _stats_server_incr_by_anyway(_ctx, _server, STATS_SERVER_##_name, _val);   \
+} while (0)
+
+#endif //shenzheng 2015-6-11 config-reload
+
 #else
 
 #define stats_pool_incr(_ctx, _pool, _name)
@@ -189,6 +231,14 @@ typedef enum stats_server_field {
 #define stats_server_incr_by(_ctx, _server, _name, _val)
 
 #define stats_server_decr_by(_ctx, _server, _name, _val)
+
+#if 1 //shenzheng 2015-6-11 config-reload
+
+#define stats_pool_incr_by_anyway(_ctx, _pool, _name, _val)
+
+#define stats_server_incr_by_anyway(_ctx, _server, _name, _val)
+
+#endif //shenzheng 2015-6-11 config-reload
 
 #endif
 
@@ -208,8 +258,19 @@ void _stats_server_incr_by(struct context *ctx, struct server *server, stats_ser
 void _stats_server_decr_by(struct context *ctx, struct server *server, stats_server_field_t fidx, int64_t val);
 void _stats_server_set_ts(struct context *ctx, struct server *server, stats_server_field_t fidx, int64_t val);
 
+#if 1 //shenzheng 2015-6-11 config-reload
+void _stats_pool_incr_by_anyway(struct context *ctx, struct server_pool *pool, stats_pool_field_t fidx, int64_t val);
+void _stats_server_incr_by_anyway(struct context *ctx, struct server *server, stats_server_field_t fidx, int64_t val);
+#endif //shenzheng 2015-6-11 config-reload
+
 struct stats *stats_create(uint16_t stats_port, char *stats_ip, int stats_interval, char *source, struct array *server_pool);
 void stats_destroy(struct stats *stats);
 void stats_swap(struct stats *stats);
 
+#if 1 //shenzheng 2015-5-14 config-reload
+rstatus_t stats_recreate_buf(struct stats *st);
+rstatus_t stats_recreate(struct context *ctx, struct array *server_pool);
+#endif //shenzheng 2015-5-14 config-reload
+
 #endif
+

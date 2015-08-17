@@ -87,6 +87,14 @@ static uint64_t ntotal_conn;       /* total # connections counter from start */
 static uint32_t ncurr_conn;        /* current # connections */
 static uint32_t ncurr_cconn;       /* current # client connections */
 
+#if 1 //shenzheng 2015-7-8 proxy administer
+static uint32_t nfree_connq_proxy_adm;       /* # free conn q for proxy administer  */
+static struct conn_tqh free_connq_proxy_adm; /* free conn q for proxy administer  */
+static uint64_t ntotal_conn_proxy_adm;       /* total # connections counter from start for proxy administer  */
+static uint32_t ncurr_conn_proxy_adm;        /* current # connections for proxy administer  */
+static uint32_t ncurr_cconn_proxy_adm;       /* current # client connections for proxy administer  */
+#endif //shenzheng 2015-7-8 proxy administer
+
 /*
  * Return the context associated with this connection.
  */
@@ -157,6 +165,16 @@ _conn_get(void)
     conn->done = 0;
     conn->redis = 0;
     conn->need_auth = 0;
+	
+#if 1 //shenzheng 2015-7-14 config-reload
+	conn->reload_conf = 0;
+#endif //shenzheng 2015-7-14 config-reload
+
+#if 1 //shenzheng 2015-7-28 replace server
+	conn->replace_server = 0;
+	conn->conf_version_curr = -1;
+	conn->ctx = NULL;
+#endif //shenzheng 2015-7-28 replace server
 
     ntotal_conn++;
     ncurr_conn++;
@@ -454,3 +472,435 @@ conn_ncurr_cconn(void)
 {
     return ncurr_cconn;
 }
+
+#if 1 //shenzheng 2015-4-27 proxy administer
+uint32_t
+conn_ncurr_conn_proxy_adm(void)
+{
+    return ncurr_conn_proxy_adm;
+}
+
+uint64_t
+conn_ntotal_conn_proxy_adm(void)
+{
+    return ntotal_conn_proxy_adm;
+}
+
+uint32_t
+conn_ncurr_cconn_proxy_adm(void)
+{
+    return ncurr_cconn_proxy_adm;
+}
+
+static struct conn *
+_conn_get_proxy_adm(void)
+{
+    struct conn *conn;
+
+    if (!TAILQ_EMPTY(&free_connq_proxy_adm)) {
+        ASSERT(nfree_connq_proxy_adm > 0);
+
+        conn = TAILQ_FIRST(&free_connq_proxy_adm);
+        nfree_connq_proxy_adm--;
+        TAILQ_REMOVE(&free_connq_proxy_adm, conn, conn_tqe);
+    } else {
+        conn = nc_alloc(sizeof(*conn));
+        if (conn == NULL) {
+            return NULL;
+        }
+    }
+
+    conn->owner = NULL;
+
+    conn->sd = -1;
+    /* {family, addrlen, addr} are initialized in enqueue handler */
+
+    TAILQ_INIT(&conn->imsg_q);
+    TAILQ_INIT(&conn->omsg_q);
+    conn->rmsg = NULL;
+    conn->smsg = NULL;
+
+    /*
+     * Callbacks {recv, recv_next, recv_done}, {send, send_next, send_done},
+     * {close, active}, parse, {ref, unref}, {enqueue_inq, dequeue_inq} and
+     * {enqueue_outq, dequeue_outq} are initialized by the wrapper.
+     */
+
+    conn->send_bytes = 0;
+    conn->recv_bytes = 0;
+
+    conn->events = 0;
+    conn->err = 0;
+    conn->recv_active = 0;
+    conn->recv_ready = 0;
+    conn->send_active = 0;
+    conn->send_ready = 0;
+
+    conn->client = 0;
+    conn->proxy = 0;
+    conn->connecting = 0;
+    conn->connected = 0;
+    conn->eof = 0;
+    conn->done = 0;
+    conn->redis = 0;
+    conn->need_auth = 0;
+	
+#if 1 //shenzheng 2015-7-14 config-reload
+	conn->reload_conf = 0;
+#endif //shenzheng 2015-7-14 config-reload
+
+#if 1 //shenzheng 2015-7-28 replace server
+	conn->replace_server = 0;
+	conn->conf_version_curr = -1;
+	conn->ctx = NULL;
+#endif //shenzheng 2015-7-28 replace server
+
+    ntotal_conn_proxy_adm++;
+    ncurr_conn_proxy_adm++;
+
+    return conn;
+}
+
+void
+conn_put_proxy_adm(struct conn *conn)
+{
+    ASSERT(conn->sd < 0);
+    ASSERT(conn->owner == NULL);
+
+    log_debug(LOG_VVERB, "put conn %p", conn);
+
+    nfree_connq_proxy_adm++;
+    TAILQ_INSERT_HEAD(&free_connq_proxy_adm, conn, conn_tqe);
+
+    if (conn->client) {
+        ncurr_cconn_proxy_adm--;
+    }
+    ncurr_conn_proxy_adm--;
+}
+
+struct conn *
+conn_get_proxy_adm(void *owner, int sd, bool client)
+{
+	
+	struct conn *conn;
+	
+	conn = _conn_get_proxy_adm();
+	if (conn == NULL) {
+		return NULL;
+	}
+
+	conn->sd = sd;
+	if(client)
+	{
+		conn->client = 1;
+		conn->recv = msg_recv_proxy_adm;
+		conn->recv_next = req_recv_next_proxy_adm;
+		conn->recv_done = req_recv_done_proxy_adm;
+
+		conn->send = msg_send_proxy_adm;
+		conn->send_next = rsp_send_next_proxy_adm;
+		conn->send_done = rsp_send_done_proxy_adm;
+
+		conn->close = proxy_adm_client_close;
+		conn->active = proxy_adm_client_active;
+
+		conn->ref = proxy_adm_client_ref;
+		conn->unref = proxy_adm_client_unref;
+		conn->need_auth = NULL;
+		
+		conn->enqueue_inq = NULL;
+		conn->dequeue_inq = NULL;
+		conn->enqueue_outq = req_client_enqueue_omsgq;
+		conn->dequeue_outq = req_client_dequeue_omsgq;		
+		
+		ncurr_cconn_proxy_adm++;
+	}
+	else
+	{
+		conn->proxy = 1;
+		conn->recv = proxy_adm_recv;
+	    conn->recv_next = NULL;
+	    conn->recv_done = NULL;
+
+	    conn->send = NULL;
+	    conn->send_next = NULL;
+	    conn->send_done = NULL;
+
+	    conn->close = proxy_adm_close;
+	    conn->active = NULL;
+
+	    conn->ref = proxy_adm_ref;
+	    conn->unref = proxy_adm_unref;
+
+	    conn->enqueue_inq = NULL;
+	    conn->dequeue_inq = NULL;
+	    conn->enqueue_outq = NULL;
+	    conn->dequeue_outq = NULL;
+
+    }
+	
+
+	conn->ref(conn, owner);
+    log_debug(LOG_VVERB, "get conn %p client %d", conn, conn->client);
+
+	return conn;
+}
+#endif //shenzheng 2015-7-9 proxy administer
+
+#if 1 //shenzheng 2015-7-9 config-reload
+static struct conn *
+_conn_get_for_reload(void)
+{
+    struct conn *conn;
+	
+    conn = nc_alloc(sizeof(*conn));
+    if (conn == NULL) {
+        return NULL;
+    }
+    
+    conn->owner = NULL;
+
+    conn->sd = -1;
+    /* {family, addrlen, addr} are initialized in enqueue handler */
+
+    TAILQ_INIT(&conn->imsg_q);
+    TAILQ_INIT(&conn->omsg_q);
+    conn->rmsg = NULL;
+    conn->smsg = NULL;
+
+    /*
+     * Callbacks {recv, recv_next, recv_done}, {send, send_next, send_done},
+     * {close, active}, parse, {ref, unref}, {enqueue_inq, dequeue_inq} and
+     * {enqueue_outq, dequeue_outq} are initialized by the wrapper.
+     */
+
+    conn->send_bytes = 0;
+    conn->recv_bytes = 0;
+
+    conn->events = 0;
+    conn->err = 0;
+    conn->recv_active = 0;
+    conn->recv_ready = 0;
+    conn->send_active = 0;
+    conn->send_ready = 0;
+
+    conn->client = 0;
+    conn->proxy = 0;
+    conn->connecting = 0;
+    conn->connected = 0;
+    conn->eof = 0;
+    conn->done = 0;
+    conn->redis = 0;
+    conn->need_auth = 0;
+	conn->reload_conf = 0;
+
+#if 1 //shenzheng 2015-7-28 replace server
+	conn->replace_server = 0;
+	conn->conf_version_curr = -1;
+	conn->ctx = NULL;
+#endif //shenzheng 2015-7-28 replace server
+
+    ntotal_conn++;
+    ncurr_conn++;
+	
+    return conn;
+}
+
+struct conn *
+conn_get_proxy_for_reload(void *owner)
+{
+    struct server_pool *pool = owner;
+    struct conn *conn;
+
+    conn = _conn_get_for_reload();
+    if (conn == NULL) {
+        return NULL;
+    }
+
+    conn->redis = pool->redis;
+
+    conn->proxy = 1;
+
+    conn->recv = proxy_recv;
+    conn->recv_next = NULL;
+    conn->recv_done = NULL;
+
+    conn->send = NULL;
+    conn->send_next = NULL;
+    conn->send_done = NULL;
+
+    conn->close = proxy_close;
+    conn->active = NULL;
+
+    conn->ref = proxy_ref;
+    conn->unref = proxy_unref;
+
+    conn->enqueue_inq = NULL;
+    conn->dequeue_inq = NULL;
+    conn->enqueue_outq = NULL;
+    conn->dequeue_outq = NULL;
+
+    conn->ref(conn, owner);
+
+    log_debug(LOG_VVERB, "get conn %p proxy %d", conn, conn->proxy);
+
+    return conn;
+}
+
+struct conn *
+conn_get_for_reload(void *owner)
+{
+    struct conn *conn;
+
+    conn = _conn_get_for_reload();
+    if (conn == NULL) {
+        return NULL;
+    }
+
+    conn->redis = 0;
+
+    conn->proxy = 0;
+
+    conn->recv = NULL;
+    conn->recv_next = NULL;
+    conn->recv_done = NULL;
+
+    conn->send = NULL;
+    conn->send_next = NULL;
+    conn->send_done = NULL;
+
+    conn->close = NULL;
+    conn->active = NULL;
+
+    conn->ref = NULL;
+    conn->unref = NULL;
+
+    conn->enqueue_inq = NULL;
+    conn->dequeue_inq = NULL;
+    conn->enqueue_outq = NULL;
+    conn->dequeue_outq = NULL;
+
+	conn->owner = owner;
+
+	conn->reload_conf = 1;
+
+    log_debug(LOG_VVERB, "get conn %p proxy %d", conn, conn->proxy);
+
+    return conn;
+}
+
+void
+conn_put_for_reload(struct conn *conn)
+{
+    ASSERT(conn->sd < 0);
+    ASSERT(conn->owner == NULL);
+
+    log_debug(LOG_VVERB, "free conn %p", conn);
+
+    ncurr_conn--;
+	nc_free(conn);
+}
+#endif //shenzheng 2015-7-14 config-reload
+
+#if 1 //shenzheng 2015-7-28 replace server
+void conn_close_for_replace_server(struct conn *conn, int err)
+{
+	rstatus_t status;
+	struct server *server;
+	struct context *ctx;
+	struct conn *c_conn;
+	struct msg *pmsg, *msg;
+	
+	if(conn != NULL)
+	{
+		ASSERT(!conn->proxy && !conn->client);
+		
+		ctx = conn->ctx;
+		server = conn->owner;
+		
+		ASSERT(ctx != NULL);
+
+		status = event_del_conn(ctx->evb, conn);
+	    if (status < 0) {
+	        log_warn("event del conn server %d failed, ignored: %s",
+	                 conn->sd, strerror(errno));
+	    }
+
+		ASSERT(server->ns_conn_q > 0);
+		//conn = TAILQ_FIRST(&server->s_conn_q);
+		conn->err = err;
+		
+		if(!TAILQ_EMPTY(&conn->imsg_q))
+		{
+			pmsg = TAILQ_FIRST(&conn->imsg_q);
+			TAILQ_REMOVE(&conn->imsg_q, pmsg, s_tqe);
+		}
+		else if(!TAILQ_EMPTY(&conn->omsg_q))
+		{
+			pmsg = TAILQ_FIRST(&conn->omsg_q);
+			TAILQ_REMOVE(&conn->omsg_q, pmsg, s_tqe);
+		}
+		else
+		{
+			NOT_REACHED();
+		}
+
+		ASSERT(pmsg->request);
+
+		msg_tmo_delete(pmsg);
+
+		log_debug(LOG_DEBUG, "pmsg->swallow %d", pmsg->swallow);
+
+		conn->unref(conn);
+
+		if(pmsg->swallow)
+		{
+			req_put(pmsg);
+		}
+		else
+		{
+			c_conn = pmsg->owner;
+
+			ASSERT(!c_conn->proxy && c_conn->client);
+			
+			ASSERT(!TAILQ_EMPTY(&c_conn->omsg_q));
+
+			pmsg->done = 1;
+			pmsg->error = 1;
+	        pmsg->err = conn->err;
+
+	        if (req_done(c_conn, TAILQ_FIRST(&c_conn->omsg_q))) {
+	            event_add_out(ctx->evb, c_conn);
+	        }
+		}
+		
+		ASSERT(TAILQ_EMPTY(&conn->imsg_q));
+		ASSERT(TAILQ_EMPTY(&conn->omsg_q));
+
+		ASSERT(conn->smsg == NULL);
+		msg = conn->rmsg;
+	    if (msg != NULL) {
+	        conn->rmsg = NULL;
+
+	        ASSERT(!msg->request);
+	        ASSERT(msg->peer == NULL);
+
+	        rsp_put(msg);
+
+	        log_debug(LOG_INFO, "close s %d discarding rsp %"PRIu64" len %"PRIu32" "
+	                  "in error", conn->sd, msg->id, msg->mlen);
+	    }
+
+	    status = close(conn->sd);
+	    if (status < 0) {
+	        log_error("close s %d failed, ignored: %s", conn->sd, strerror(errno));
+	    }
+	    conn->sd = -1;
+
+	    conn_put(conn);
+
+		ASSERT(server->ns_conn_q == 0);
+		ASSERT(TAILQ_EMPTY(&server->s_conn_q));
+	}
+}
+#endif //shenzheng 2015-7-28 replace server

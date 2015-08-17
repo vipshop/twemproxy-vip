@@ -41,6 +41,10 @@
 #define CONF_UNSET_HASH (hash_type_t) -1
 #define CONF_UNSET_DIST (dist_type_t) -1
 
+#if 1 //shenzheng 2015-1-8 log rotating
+#define CONF_UNSET_LOG_FILE_COUNT -2
+#endif //shenzheng 2015-1-8 log rotating
+
 #define CONF_DEFAULT_HASH                    HASH_FNV1A_64
 #define CONF_DEFAULT_DIST                    DIST_KETAMA
 #define CONF_DEFAULT_TIMEOUT                 -1
@@ -53,6 +57,26 @@
 #define CONF_DEFAULT_SERVER_FAILURE_LIMIT    2
 #define CONF_DEFAULT_SERVER_CONNECTIONS      1
 #define CONF_DEFAULT_KETAMA_PORT             11211
+
+#if 1 //shenzheng 2015-1-8 log rotating
+#define CONF_DEFAULT_LOG_RORATE			 	 1
+#define CONF_DEFAULT_LOG_FILE_MAX_SIZE		 1073741824
+#define CONF_DEFAULT_LOG_FILE_COUNT			 10
+#endif //shenzheng 2015-1-8 log rotating
+
+#if 1 //shenzheng 2015-6-5 tcpkeepalive
+#define CONF_DEFAULT_TCPKEEPALIVE            false
+#define CONF_DEFAULT_TCPKEEPIDLE             -1
+#define CONF_DEFAULT_TCPKEEPINTVL            -1
+#define CONF_DEFAULT_TCPKEEPCNT              -1
+#endif //shenzheng 2015-6-5 tcpkeepalive
+
+#if 1 //shenzheng 2015-6-8 config-reload
+typedef enum conf_parse_type {
+    CONF_PARSE_FILE,                   /* conf parse from file */
+    CONF_PARSE_STRING				   /* conf parse from string */
+} conf_parse_type_t;
+#endif //shenzheng 2015-6-8 config-reload
 
 struct conf_listen {
     struct string   pname;   /* listen: as "name:port" */
@@ -69,6 +93,11 @@ struct conf_server {
     int             weight;     /* weight */
     struct sockinfo info;       /* connect socket info */
     unsigned        valid:1;    /* valid? */
+
+#if 1 //shenzheng 2014-9-5 replace server
+	unsigned		name_null:1;	/* name in "hostname:port:weight [name]" format string is null? */
+#endif //shenzheng 2014-9-5 replace server
+
 };
 
 struct conf_pool {
@@ -89,6 +118,13 @@ struct conf_pool {
     int                server_failure_limit;  /* server_failure_limit: */
     struct array       server;                /* servers: conf_server[] */
     unsigned           valid:1;               /* valid? */
+	
+#if 1 //shenzheng 2015-6-5 tcpkeepalive
+	int				   tcpkeepalive;		  /* tcpkeepalive: */
+	int				   tcpkeepidle;			  /* tcpkeepidle: */
+	int				   tcpkeepintvl;	      /* tcpkeepintvl: */
+	int				   tcpkeepcnt;			  /* tcpkeepcnt: */
+#endif //shenzheng 2015-6-5 tcpkeepalive
 };
 
 struct conf {
@@ -131,5 +167,33 @@ rstatus_t conf_pool_each_transform(void *elem, void *data);
 
 struct conf *conf_create(char *filename);
 void conf_destroy(struct conf *cf);
+
+#if 1 //shenzheng 2015-6-26 replace server
+rstatus_t conf_write_back_yaml(struct context *ctx, struct string *old_ser, struct string *new_ser);
+#endif //shenzheng 2015-6-26 replace server
+
+#if 1 //shenzheng 2015-1-8 log rotating
+char *conf_set_log_rorate(struct conf *cf, struct command *cmd, void *conf);
+char *conf_set_log_file_max_size(struct conf *cf, struct command *cmd, void *conf);
+char *conf_set_log_file_count(struct conf *cf, struct command *cmd, void *conf);
+#endif //shenzheng 2015-1-8 log rotating
+
+#if 1 //shenzheng 2015-4-29 common
+struct string *hash_type_to_string(hash_type_t hash_type);
+struct string *dist_type_to_string(dist_type_t dist_type);
+#endif //shenzheng 2015-4-29 common
+
+#if 1 //shenzheng 2015-5-29 config-reload
+rstatus_t conf_two_check_diff(struct conf *cf, struct conf *cf_new);
+struct conf *conf_create_from_string(struct string *cf_s);
+rstatus_t conf_reload(struct context *ctx, 	struct conn *conn, conf_parse_type_t parse_type, struct string *cf_s, struct msg * msg);
+#endif //shenzheng 2015-5-29 config-reload
+
+#if 1 //shenzheng 2015-6-6 zookeeper
+#ifdef NC_ZOOKEEPER
+struct conf *conf_create_from_zk(struct context * ctx, char *zk_servers, char *zk_path);
+rstatus_t conf_keep_from_zk(struct context * ctx, void *zkhandle, char *zk_path);
+#endif
+#endif //shenzheng 2015-6-6 zookeeper
 
 #endif
