@@ -2105,6 +2105,22 @@ msg_append_server_pool_info(struct server_pool *sp, struct msg *msg)
 		return status;
     }
 
+    //append redis_auth
+	key = "  redis_auth: ";
+	status = msg_append_proxy_adm(msg, (uint8_t *)key, strlen(key));
+	if (status != NC_OK) {
+		return status;
+    }
+	content_ptr = &sp->redis_auth;
+	status = msg_append_proxy_adm(msg, content_ptr->data, content_ptr->len);
+	if (status != NC_OK) {
+		return status;
+    }
+	status = msg_append_proxy_adm(msg, (uint8_t *)CRLF, CRLF_LEN);
+    if (status != NC_OK) {
+		return status;
+    }
+
 	//append server_connections
 	key = "  server_connections: ";
 	status = msg_append_proxy_adm(msg, (uint8_t *)key, strlen(key));
