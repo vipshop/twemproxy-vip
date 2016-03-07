@@ -2434,6 +2434,12 @@ conf_pool_each_compare(void *elem, void *data)
 		return NC_ERROR;
 	}
 
+    //redis_auth
+    if(string_compare(&cp1->redis_auth, &cp2->redis_auth))
+	{
+		return NC_ERROR;
+	}
+
 	//server_connections
 	if(cp1->server_connections != cp2->server_connections)
 	{
